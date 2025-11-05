@@ -546,15 +546,21 @@ with st.expander("1) Game Selection + Prediction", expanded=(selected_section ==
         st.plotly_chart(fig_margin, use_container_width=True)
 
 # -------------------------
-# Section 2: Top Edges of the Week
+# Section 2: Top Edges of the Week (Color-Coded)
 # -------------------------
 with st.expander("2) Top Edges This Week", expanded=(selected_section == section_names[1])):
+
     if 'sec1_week' in st.session_state:
         selected_week_for_edges = st.session_state['sec1_week']
     else:
         selected_week_for_edges = sorted(scores_df["week"].dropna().unique())[0]
+
+    st.markdown(
+        f"**Week shown:** {selected_week_for_edges}  \n"
+        "🟩 = Strong play | 🟨 = Lean / Maybe | 🟥 = Stay away"
+    )
+
     wk = scores_df[scores_df["week"] == selected_week_for_edges].copy()
-    st.caption(f"Week shown: {selected_week_for_edges}")
     rows = []
     for _, r in wk.iterrows():
         h, a = r.get("home_team"), r.get("away_team")
@@ -567,6 +573,7 @@ with st.expander("2) Top Edges This Week", expanded=(selected_section == section
         sp = float(r.get("spread")) if pd.notna(r.get("spread", np.nan)) else np.nan
         total_edge = np.nan if pd.isna(ou) else tot - ou
         spread_edge = np.nan if pd.isna(sp) else mar - (-sp)
+
         rows.append({
             "Matchup": f"{a} @ {h}",
             "Pred Total": round(tot, 1),
@@ -576,14 +583,31 @@ with st.expander("2) Top Edges This Week", expanded=(selected_section == section
             "Spread": sp if not pd.isna(sp) else "",
             "Spread Edge (pts)": None if pd.isna(spread_edge) else round(spread_edge, 1),
         })
+
     edges_df = pd.DataFrame(rows)
+
     if not edges_df.empty:
-        # Rank by absolute edge (take the larger of total/spread edge per row)
-        def edge_rank(row):
+
+        def confidence_color(val):
+            if pd.isna(val):
+                return "⬜"
+            if abs(val) >= 4:
+                return "🟩"   # Strong play
+            elif abs(val) >= 2:
+                return "🟨"   # Maybe / Lean
+            else:
+                return "🟥"   # Stay away
+
+        edges_df["Total Signal"] = edges_df["Total Edge (pts)"].apply(confidence_color)
+        edges_df["Spread Signal"] = edges_df["Spread Edge (pts)"].apply(confidence_color)
+
+        def best_edge(row):
             vals = [abs(v) for v in [row.get("Total Edge (pts)"), row.get("Spread Edge (pts)")] if pd.notna(v)]
             return max(vals) if vals else 0.0
-        edges_df["Abs Edge"] = edges_df.apply(edge_rank, axis=1)
-        edges_df = edges_df.sort_values("Abs Edge", ascending=False).drop(columns=["Abs Edge"])
+
+        edges_df["Rank Score"] = edges_df.apply(best_edge, axis=1)
+        edges_df = edges_df.sort_values("Rank Score", ascending=False).drop(columns=["Rank Score"])
+
         st.dataframe(edges_df, use_container_width=True)
     else:
         st.info("No games found for this week.")
