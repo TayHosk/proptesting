@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -136,47 +137,51 @@ def normalize_header(name: str) -> str:
     name = re.sub(r"[^0-9a-z_]", "", name)
     return name
 
-def parse_spread(val) -> float:
-    """Parse sheet 'spread' into float. Your sheet uses '-' in front of the favorite's number."""
-    try:
-        s = str(val).strip()
-        # allow forms like "-9.5", " -9.5 ", etc.
-        return float(s)
-    except Exception:
-        try:
-            return float(val)
-        except Exception:
-            return np.nan
-
 def compute_home_spread(row: pd.Series) -> float:
     """
     Convert (favored_team, spread) into HOME-based spread.
-      - If home is the favorite  → return spread (e.g., -9.5)
-      - If away is the favorite  → return +abs(spread) (home is underdog)
+      - If home is the favorite  → return negative abs(spread)  (e.g., -9.5)
+      - If away is the favorite  → return positive abs(spread)  (home is underdog, e.g., +9.5)
+    Uses team_key() on both fields so 'DEN' matches 'Broncos' etc.
     """
     try:
         home = row.get("home_team", None)
         fav = row.get("favored_team", None)
-        sp = parse_spread(row.get("spread", np.nan))
+        sp = row.get("spread", np.nan)  # already numeric after cleaning
         if pd.isna(sp) or not fav or not home:
             return np.nan
-        return sp if (str(fav) == str(home)) else abs(sp)
+        hk = team_key(home)
+        fk = team_key(fav)
+        return -abs(sp) if (fk and hk and fk == hk) else abs(sp)
     except Exception:
         return np.nan
 
 @st.cache_data(show_spinner=False)
 def load_scores() -> pd.DataFrame:
     df = pd.read_csv(SCORE_URL)
+    # Normalize headers
     df.columns = [normalize_header(c) for c in df.columns]
+
+    # Coerce numeric fields
+    if "over_under" in df.columns:
+        df["over_under"] = pd.to_numeric(df["over_under"], errors="coerce")
+    if "spread" in df.columns:
+        df["spread"] = pd.to_numeric(df["spread"], errors="coerce")
+
+    # Make quick keys for teams (useful elsewhere)
     if "home_team" in df.columns:
         df["home_key"] = df["home_team"].apply(team_key)
     if "away_team" in df.columns:
         df["away_key"] = df["away_team"].apply(team_key)
-    # derive home_spread from favored_team + spread
+    if "favored_team" in df.columns:
+        df["favored_key"] = df["favored_team"].apply(team_key)
+
+    # Derive home_spread from favored_team + spread using keys
     if {"home_team", "favored_team", "spread"}.issubset(df.columns):
         df["home_spread"] = df.apply(compute_home_spread, axis=1)
     else:
         df["home_spread"] = np.nan
+
     return df
 
 def load_and_clean(url: str) -> pd.DataFrame:
@@ -508,15 +513,13 @@ with st.expander("1) Game Selection + Prediction", expanded=(selected_section ==
     else:
         g = game_row.iloc[0]
         opponent = g["away_team"] if g["home_team"] == selected_team else g["home_team"]
-        selected_team_key = team_key(selected_team)
-        opponent_key = team_key(opponent)
 
         with cols[2]:
             st.markdown(f"**Matchup:** {selected_team} vs {opponent}")
 
-        # Prefill: O/U and HOME-BASED spread (home_spread)
-        default_ou = float(g.get("over_under", 45.0)) if pd.notna(g.get("over_under", np.nan)) else 45.0
-        default_home_spread = float(g.get("home_spread", np.nan)) if pd.notna(g.get("home_spread", np.nan)) else 0.0
+        # Prefill: O/U and HOME-BASED spread (home_spread) – these now auto-populate from the sheet
+        default_ou = float(g["over_under"]) if pd.notna(g.get("over_under", np.nan)) else 45.0
+        default_home_spread = float(g["home_spread"]) if pd.notna(g.get("home_spread", np.nan)) else 0.0
 
         cL, cR = st.columns(2)
         with cL:
@@ -528,7 +531,7 @@ with st.expander("1) Game Selection + Prediction", expanded=(selected_section ==
         st.subheader("Game Prediction (Vegas-Calibrated)")
         team_pts, opp_pts = predict_scores(scores_df, selected_team, opponent)
         total_pred = team_pts + opp_pts
-        margin = team_pts - opp_pts  # home - away if selected is home? (we compare vs line below)
+        margin = team_pts - opp_pts
         total_diff = total_pred - over_under
         spread_diff = margin - (-home_spread_val)  # compare to home margin target
 
@@ -586,33 +589,20 @@ with st.expander("2) Top Edges This Week", expanded=(selected_section == section
         # Total pick label
         if pd.isna(total_edge):
             total_pick = ""
-            total_badge = "⬜"
         else:
             direction = "OVER" if total_edge > 0 else "UNDER"
             total_badge = strength_badge(total_edge)
             total_pick = f"{total_badge} {direction}"
 
-        # Spread pick label (always show betting line based on who is favorite)
+        # Spread pick label
         if pd.isna(spread_edge) or pd.isna(home_spread):
             spread_pick = ""
         else:
-            # Determine which team is favored
-            if home_spread < 0:  # Home is favorite
-                fav_team = h
-                dog_team = a
-                line = home_spread
-            else:               # Away is favorite
-                fav_team = a
-                dog_team = h
-                line = -home_spread  # away favorite means home gets +spread
-
-            # Determine which side the model likes
             home_covers = mar_pred > -home_spread
             if home_covers:
-                pick_text = f"{fav_team} {line:+.1f}"
+                pick_text = f"{h} {home_spread:+.1f}"
             else:
-                pick_text = f"{dog_team} {(-line):+.1f}"
-
+                pick_text = f"{a} {(-home_spread):+.1f}"
             spread_badge = strength_badge(spread_edge)
             spread_pick = f"{spread_badge} {pick_text}"
 
@@ -631,7 +621,6 @@ with st.expander("2) Top Edges This Week", expanded=(selected_section == section
     edges_df = pd.DataFrame(rows)
 
     if not edges_df.empty:
-        # Rank by strongest edge (abs of either total/spread edge)
         def best_edge(row):
             vals = [abs(v) for v in [row.get("Total Edge (pts)"), row.get("Spread Edge (pts)")] if pd.notna(v)]
             return max(vals) if vals else 0.0
@@ -665,8 +654,6 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
         else:
             g = game_row.iloc[0]
             opponent = g["away_team"] if g["home_team"] == selected_team else g["home_team"]
-            selected_team_key = team_key(selected_team)
-            opponent_key = team_key(opponent)
 
             def players_for_team(df, team_name_or_label):
                 key = team_key(team_name_or_label)
@@ -674,6 +661,11 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
                     return []
                 mask = df["team_key"] == key
                 return list(df.loc[mask, "player"].dropna().unique())
+
+            # Player pools
+            player_data = load_all_player_dfs()
+            p_rec, p_rush, p_pass = player_data["player_receiving"], player_data["player_rushing"], player_data["player_passing"]
+            d_rb, d_qb, d_wr, d_te = player_data["def_rb"], player_data["def_qb"], player_data["def_wr"], player_data["def_te"]
 
             team_players = set(
                 players_for_team(p_rec, selected_team) +
@@ -690,7 +682,7 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
             if not both_players:
                 st.info(
                     "No players found for this matchup. "
-                    f"Resolved keys — Your selection: **{selected_team_key}**, Opponent: **{opponent_key}**."
+                    f"Resolved keys — Your selection: **{team_key(selected_team)}**, Opponent: **{team_key(opponent)}**."
                 )
 
             c1, c2, c3 = st.columns([2, 1.2, 1.2])
@@ -708,8 +700,8 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
                     player_name=player_name,
                     selected_prop=selected_prop,
                     line_val=line_val,
-                    selected_team_key=selected_team_key,
-                    opponent_key=opponent_key,
+                    selected_team_key=team_key(selected_team),
+                    opponent_key=team_key(opponent),
                     p_rec=p_rec, p_rush=p_rush, p_pass=p_pass,
                     d_qb=d_qb, d_rb=d_rb, d_wr=d_wr, d_te=d_te
                 )
@@ -750,6 +742,11 @@ with st.expander("4) Parlay Builder (Players + Game Markets)", expanded=(selecte
             if "player" in df.columns:
                 names.extend(list(df["player"].dropna().astype(str).unique()))
         return sorted(pd.unique(names))
+
+    # Use already-loaded player data from above to keep it fast
+    player_data = load_all_player_dfs()
+    p_rec, p_rush, p_pass = player_data["player_receiving"], player_data["player_rushing"], player_data["player_passing"]
+    d_rb, d_qb, d_wr, d_te = player_data["def_rb"], player_data["def_qb"], player_data["def_wr"], player_data["def_te"]
 
     all_players = unique_players(p_rec, p_rush, p_pass)
     full_team_names = sorted(list(CODE_TO_FULLNAME.values()))
@@ -859,7 +856,6 @@ with st.expander("4) Parlay Builder (Players + Game Markets)", expanded=(selecte
                 else:
                     _, p_cov = prob_spread_cover(scores_df, home_team, away_team, gm_spread, gm_side_spread)
                     prob = float(p_cov)
-                    # Show the actual betting line by team perspective
                     if gm_side_spread == "home":
                         side_text = f"{home_team} {gm_spread:+.1f}"
                     else:
