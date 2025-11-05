@@ -625,15 +625,20 @@ with st.expander("2) Top Edges This Week", expanded=(selected_section == section
             total_badge = strength_badge(total_edge)
             total_pick = f"{total_badge} {direction}"
 
-        # Spread pick (home-based format for the number lives in its own column)
-        if pd.isna(spread_edge) or pd.isna(home_spread):
-            spread_pick = ""
-            spread_badge = "⬜"
-        else:
-            home_covers = mar_pred > -home_spread
-            spread_badge = strength_badge(spread_edge)
-            # Keep pick wording team-based, but the numeric line stays in the separate "Spread (home)" column.
-            spread_pick = f"{spread_badge} {h} cover" if home_covers else f"{spread_badge} {a} cover"
+        # Spread pick (show numeric line directly in the label)
+if pd.isna(spread_edge) or pd.isna(home_spread):
+    spread_pick = ""
+    spread_badge = "⬜"
+else:
+    spread_badge = strength_badge(spread_edge)
+
+    # If home team cover is favored
+    if mar_pred > -home_spread:
+        # Home covering means home_spread is correct sign to display
+        spread_pick = f"{spread_badge} {h} {home_spread:+.1f}"
+    else:
+        # Away cover means away team would effectively cover the inverse line
+        spread_pick = f"{spread_badge} {a} {(-home_spread):+.1f}"
 
         rows.append({
             "Matchup": f"{a} @ {h}",
