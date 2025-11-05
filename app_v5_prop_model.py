@@ -467,6 +467,9 @@ def prob_spread_cover(scores_df: pd.DataFrame, home: str, away: str, home_spread
 st.title("🏈 New Model Dashboard")
 
 scores_df = load_scores()
+# Ensure home_spread always exists (pre-calculated or recomputed)
+if "home_spread" not in scores_df.columns or scores_df["home_spread"].isna().all():
+    scores_df["home_spread"] = scores_df.apply(compute_home_spread, axis=1)
 if scores_df.empty:
     st.error("Could not load NFL game data.")
     st.stop()
