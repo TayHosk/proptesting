@@ -110,6 +110,7 @@ CODE_TO_FULLNAME = {
     "NYJ": "New York Jets", "PHI": "Philadelphia Eagles", "PIT": "Pittsburgh Steelers", "SEA": "Seattle Seahawks",
     "SF": "San Francisco 49ers", "TB": "Tampa Bay Buccaneers", "TEN": "Tennessee Titans", "WAS": "Washington Commanders"
 }
+FULLNAME_TO_CODE = {v: k for k, v in CODE_TO_FULLNAME.items()}
 
 def team_key(name: str) -> str:
     """Map any team string (full, nickname, abbreviation) to a canonical 2–3 letter code."""
@@ -254,10 +255,11 @@ def prop_prediction_and_probs(
     d_qb: pd.DataFrame,
     d_rb: pd.DataFrame,
     d_wr: pd.DataFrame,
-    d_te: pd.DataFrame
+    d_te: pd.DataFrame,
+    opponent_key_override: str = None
 ):
-    """Return a dict with predicted_pg, prob_over, prob_under for non-TD props,
-    and prob_anytime for TD. Uses same logic as the Player Props section."""
+    """Return dict with predicted_pg, prob_over, prob_under (non-TD) or prob_anytime (TD).
+       If opponent_key_override is given, use that defense regardless of selected game."""
     def pick_player_df(prop):
         if prop in ["receiving_yards", "receptions", "targets"]:
             return p_rec, "wr"
@@ -267,7 +269,7 @@ def prop_prediction_and_probs(
             return p_pass, "qb"
         return p_rec, "wr"
 
-    # Anytime TD calculation (ignore line)
+    # Anytime TD calculation
     if selected_prop == "anytime_td":
         rec_row = find_player_in(p_rec, player_name)
         rush_row = find_player_in(p_rush, player_name)
@@ -303,7 +305,11 @@ def prop_prediction_and_probs(
                     break
         if not player_team_key:
             player_team_key = selected_team_key
-        opp_key_for_player = opponent_key if player_team_key == selected_team_key else selected_team_key
+        # determine opponent
+        if opponent_key_override:
+            opp_key_for_player = opponent_key_override
+        else:
+            opp_key_for_player = opponent_key if player_team_key == selected_team_key else selected_team_key
         opp_td_list = []
         for d in def_dfs:
             mask = d["team_key"] == opp_key_for_player
@@ -336,7 +342,10 @@ def prop_prediction_and_probs(
     def_col = detect_def_col(def_df, selected_prop) if def_df is not None else None
 
     player_team_key = str(this_player_df.iloc[0].get("team_key", "")).strip()
-    opp_key_for_player = opponent_key if player_team_key == selected_team_key else selected_team_key
+    if opponent_key_override:
+        opp_key_for_player = opponent_key_override
+    else:
+        opp_key_for_player = opponent_key if player_team_key == selected_team_key else selected_team_key
 
     opp_allowed_pg = None
     league_allowed_pg = None
@@ -587,7 +596,6 @@ with st.container():
         if "error" in res:
             st.warning(res["error"])
         elif selected_prop == "anytime_td":
-            opp_label = CODE_TO_FULLNAME.get(opponent_key if team_key(player_name) == selected_team_key else selected_team_key, "")
             st.subheader("Anytime TD Probability")
             st.write(f"Estimated Anytime TD Probability: **{res['prob_anytime']*100:.1f}%**")
 
@@ -617,71 +625,68 @@ with st.container():
         st.info("Select a player to evaluate props.")
 
 # -------------------------
-# 5) Parlay Builder
+# 5) Parlay Builder (Any Player + Choose Opponent by Full Name)
 # -------------------------
 with st.container():
-    st.header("5) Parlay Builder (Model‑Driven)")
+    st.header("5) Parlay Builder (Model‑Driven, Any Game)")
 
     if "parlay_legs" not in st.session_state:
         st.session_state.parlay_legs = []  # each leg: dict(player, prop, line, side, prob, note)
 
-    # Build the same player pool for convenience
-    def players_for_team(df, team_name_or_label):
-        key = team_key(team_name_or_label)
-        if "team_key" not in df.columns or "player" not in df.columns:
-            return []
-        mask = df["team_key"] == key
-        return list(df.loc[mask, "player"].dropna().unique())
+    # Build global player pool (any team)
+    def unique_players(*dfs):
+        names = []
+        for df in dfs:
+            if "player" in df.columns:
+                names.extend(list(df["player"].dropna().astype(str).unique()))
+        return sorted(pd.unique(names))
 
-    team_players = set(
-        players_for_team(p_rec, selected_team) +
-        players_for_team(p_rush, selected_team) +
-        players_for_team(p_pass, selected_team)
-    )
-    opp_players = set(
-        players_for_team(p_rec, opponent) +
-        players_for_team(p_rush, opponent) +
-        players_for_team(p_pass, opponent)
-    )
-    both_players = sorted(team_players.union(opp_players))
+    all_players = unique_players(p_rec, p_rush, p_pass)
+    full_team_names = sorted(list(CODE_TO_FULLNAME.values()))
 
-    a1, a2, a3, a4 = st.columns([2, 1.5, 1.2, 1.2])
+    a1, a2, a3, a4, a5 = st.columns([2.2, 1.6, 1.2, 1.2, 1.2])
     with a1:
-        pb_player = st.selectbox("Player", [""] + both_players, key="pb_player")
+        pb_player = st.selectbox("Player", [""] + all_players, key="pb_any_player")
     with a2:
-        pb_prop = st.selectbox("Prop", ["passing_yards", "rushing_yards", "receiving_yards", "receptions", "targets", "carries", "anytime_td"], key="pb_prop")
+        pb_prop = st.selectbox("Prop", ["passing_yards", "rushing_yards", "receiving_yards", "receptions", "targets", "carries", "anytime_td"], key="pb_any_prop")
     with a3:
         if pb_prop == "anytime_td":
             pb_line = 0.0
             pb_side = "yes"
-            st.text_input("Line", "—", disabled=True, key="pb_line_disabled")
+            st.text_input("Line", "—", disabled=True, key="pb_any_line_disabled")
         else:
-            pb_line = st.number_input("Line", value=50.0, step=0.5, key="pb_line")
-            pb_side = st.selectbox("Side", ["over", "under"], key="pb_side")
+            pb_line = st.number_input("Line", value=50.0, step=0.5, key="pb_any_line")
+            pb_side = st.selectbox("Side", ["over", "under"], key="pb_any_side")
     with a4:
-        if st.button("➕ Add Leg", use_container_width=True):
+        pb_opp_full = st.selectbox("Opponent (Full Name)", full_team_names, key="pb_any_opp_full")
+        pb_opp_key = FULLNAME_TO_CODE.get(pb_opp_full, "")
+    with a5:
+        if st.button("➕ Add Leg", use_container_width=True, key="pb_any_add"):
             if not pb_player:
                 st.warning("Pick a player first.")
+            elif not pb_opp_key:
+                st.warning("Pick an opponent team.")
             else:
-                # compute model probability for this leg
+                # compute model probability for this leg using explicit opponent override
                 res = prop_prediction_and_probs(
                     player_name=pb_player,
                     selected_prop=pb_prop,
                     line_val=pb_line,
-                    selected_team_key=selected_team_key,
-                    opponent_key=opponent_key,
+                    selected_team_key="SEL",   # placeholder; not used when override provided
+                    opponent_key="OPP",        # placeholder; not used when override provided
                     p_rec=p_rec, p_rush=p_rush, p_pass=p_pass,
-                    d_qb=d_qb, d_rb=d_rb, d_wr=d_wr, d_te=d_te
+                    d_qb=d_qb, d_rb=d_rb, d_wr=d_wr, d_te=d_te,
+                    opponent_key_override=pb_opp_key
                 )
                 if "error" in res:
                     st.warning(res["error"])
                 else:
                     if pb_prop == "anytime_td":
                         prob = res["prob_anytime"]
-                        note = f"Pr(TD)={prob*100:.1f}%"
+                        note = f"TD vs {pb_opp_full}: {prob*100:.1f}%"
                     else:
                         prob = res["prob_over"] if pb_side == "over" else res["prob_under"]
-                        note = f"{pb_side.title()} {pb_line} → {prob*100:.1f}%"
+                        note = f"{pb_side.title()} {pb_line} vs {pb_opp_full} → {prob*100:.1f}%"
                     st.session_state.parlay_legs.append({
                         "player": pb_player,
                         "prop": pb_prop,
@@ -690,20 +695,23 @@ with st.container():
                         "prob": float(prob),
                         "note": note
                     })
-                    st.experimental_rerun()
+                    st.rerun()
 
     # Render legs with remove buttons
     if st.session_state.parlay_legs:
         st.subheader("Your Legs")
         for i, leg in enumerate(st.session_state.parlay_legs):
-            c1, c2, c3, c4, c5 = st.columns([2, 1.6, 1.4, 1.2, 0.8])
+            c1, c2, c3, c4, c5 = st.columns([2, 1.6, 2.4, 1.4, 0.9])
             c1.markdown(f"**{leg['player']}**")
             c2.write(f"{leg['prop'].replace('_',' ').title()}")
-            c3.write("Side: " + ("Over/Under"[0:4] + " " + str(leg["line"]) if leg["prop"] != "anytime_td" else "Yes TD"))
+            if leg["prop"] == "anytime_td":
+                c3.write("Anytime TD")
+            else:
+                c3.write(f"{leg['side'].title()} {leg['line']}")
             c4.write(f"Model Pr: **{leg['prob']*100:.1f}%**")
-            if c5.button("🗑 Remove", key=f"rm_{i}"):
+            if c5.button("🗑 Remove", key=f"rm_any_{i}"):
                 st.session_state.parlay_legs.pop(i)
-                st.experimental_rerun()
+                st.rerun()
 
         # Parlay calculations
         probs = [leg["prob"] for leg in st.session_state.parlay_legs]
@@ -714,18 +722,20 @@ with st.container():
         st.markdown("---")
         b1, b2, b3 = st.columns([1.2, 1, 1])
         with b1:
-            book_total_american = st.text_input("Book Total Parlay Odds (American, e.g. +650)", value="")
+            book_total_american = st.text_input("Book Total Parlay Odds (American, e.g. +650)", value="", key="book_any_odds")
         with b2:
-            stake = st.number_input("Stake ($)", value=100.0, step=10.0, min_value=0.0)
+            stake = st.number_input("Stake ($)", value=100.0, step=10.0, min_value=0.0, key="book_any_stake")
         with b3:
             st.metric("Model Parlay Prob.", f"{parlay_hit_prob*100:.1f}%")
 
         # EV vs book
         if book_total_american.strip():
             try:
-                book_am = float(book_total_american.replace("+",""))
-                if book_total_american.strip().startswith("-"):
-                    book_am = float(book_total_american)
+                text = book_total_american.strip()
+                if text.startswith("+") or text.startswith("-"):
+                    book_am = float(text)
+                else:
+                    book_am = float(text)
                 book_dec = american_to_decimal(book_am)
                 payout = stake * (book_dec - 1.0)
                 ev = parlay_hit_prob * payout - (1 - parlay_hit_prob) * stake
@@ -735,8 +745,5 @@ with st.container():
                 st.warning("Could not parse the book odds you entered. Use a number like +650 or -120.")
         else:
             st.metric("Model Fair Odds", f"{int(model_am_odds):+d}")
-
     else:
-        st.info("Add legs above to build your parlay. We'll use your model probabilities for each leg and multiply them for the parlay hit rate.")
-
-
+        st.info("Add legs above to build your parlay. Choose any player, pick the prop/line/side, and select the opponent by full team name. We'll multiply model probabilities for your parlay hit rate.")
