@@ -411,6 +411,28 @@ def prob_to_american(p: float) -> float:
     dec = prob_to_decimal(p)
     return decimal_to_american(dec)
 
+# --- Game market probability helpers (manual lines) ---
+def game_spread_prob(team_pts: float, opp_pts: float, spread_line: float, margin_sd: float = 13.0) -> float:
+    """
+    Probability the chosen team covers a given spread.
+    spread_line: negative for favorite (-6.5), positive for underdog (+6.5)
+    team_pts/opp_pts are the model predicted points for *that team vs opponent*.
+    """
+    margin_mean = team_pts - opp_pts  # chosen team minus opponent
+    # cover if margin > -spread_line (e.g., -6.5 means need > 6.5)
+    threshold = -spread_line
+    z = (threshold - margin_mean) / max(1e-6, margin_sd)
+    return float(np.clip(1 - norm.cdf(z), 0.001, 0.999))
+
+def game_total_prob(team_pts: float, opp_pts: float, total_line: float, total_sd: float = 9.5, side: str = "over") -> float:
+    """
+    Probability the game total goes over/under total_line.
+    """
+    mean_total = team_pts + opp_pts
+    z = (total_line - mean_total) / max(1e-6, total_sd)
+    p_over = float(np.clip(1 - norm.cdf(z), 0.001, 0.999))
+    return p_over if side == "over" else (1 - p_over)
+
 # =========================
 # UI – Single Page
 # =========================
@@ -625,15 +647,15 @@ with st.container():
         st.info("Select a player to evaluate props.")
 
 # -------------------------
-# 5) Parlay Builder (Any Player + Choose Opponent by Full Name)
+# 5) Parlay Builder (Players + Game Totals/Spreads with Manual Lines)
 # -------------------------
 with st.container():
-    st.header("5) Parlay Builder (Model‑Driven, Any Game)")
+    st.header("5) Parlay Builder (Model‑Driven, Any Game + Manual Lines)")
 
     if "parlay_legs" not in st.session_state:
-        st.session_state.parlay_legs = []  # each leg: dict(player, prop, line, side, prob, note)
+        st.session_state.parlay_legs = []  # each leg: dict(type, details..., prob)
 
-    # Build global player pool (any team)
+    # ---- Player leg UI (any player, choose opponent manually) ----
     def unique_players(*dfs):
         names = []
         for df in dfs:
@@ -644,7 +666,8 @@ with st.container():
     all_players = unique_players(p_rec, p_rush, p_pass)
     full_team_names = sorted(list(CODE_TO_FULLNAME.values()))
 
-    a1, a2, a3, a4, a5 = st.columns([2.2, 1.6, 1.2, 1.2, 1.2])
+    st.subheader("Add Player Prop Leg")
+    a1, a2, a3, a4, a5 = st.columns([2.2, 1.5, 1.1, 1.1, 1.1])
     with a1:
         pb_player = st.selectbox("Player", [""] + all_players, key="pb_any_player")
     with a2:
@@ -661,19 +684,18 @@ with st.container():
         pb_opp_full = st.selectbox("Opponent (Full Name)", full_team_names, key="pb_any_opp_full")
         pb_opp_key = FULLNAME_TO_CODE.get(pb_opp_full, "")
     with a5:
-        if st.button("➕ Add Leg", use_container_width=True, key="pb_any_add"):
+        if st.button("➕ Add Player Leg", use_container_width=True, key="pb_any_add"):
             if not pb_player:
                 st.warning("Pick a player first.")
             elif not pb_opp_key:
                 st.warning("Pick an opponent team.")
             else:
-                # compute model probability for this leg using explicit opponent override
                 res = prop_prediction_and_probs(
                     player_name=pb_player,
                     selected_prop=pb_prop,
                     line_val=pb_line,
-                    selected_team_key="SEL",   # placeholder; not used when override provided
-                    opponent_key="OPP",        # placeholder; not used when override provided
+                    selected_team_key="SEL",
+                    opponent_key="OPP",
                     p_rec=p_rec, p_rush=p_rush, p_pass=p_pass,
                     d_qb=d_qb, d_rb=d_rb, d_wr=d_wr, d_te=d_te,
                     opponent_key_override=pb_opp_key
@@ -683,33 +705,76 @@ with st.container():
                 else:
                     if pb_prop == "anytime_td":
                         prob = res["prob_anytime"]
-                        note = f"TD vs {pb_opp_full}: {prob*100:.1f}%"
+                        leg_label = f"{pb_player} TD vs {pb_opp_full}"
                     else:
                         prob = res["prob_over"] if pb_side == "over" else res["prob_under"]
-                        note = f"{pb_side.title()} {pb_line} vs {pb_opp_full} → {prob*100:.1f}%"
+                        leg_label = f"{pb_player} {pb_prop.replace('_',' ').title()} {pb_side.title()} {pb_line} vs {pb_opp_full}"
                     st.session_state.parlay_legs.append({
-                        "player": pb_player,
-                        "prop": pb_prop,
-                        "side": pb_side if pb_prop != "anytime_td" else "yes",
-                        "line": float(pb_line),
-                        "prob": float(prob),
-                        "note": note
+                        "type": "player",
+                        "label": leg_label,
+                        "prob": float(prob)
                     })
                     st.rerun()
 
-    # Render legs with remove buttons
+    # ---- Game market leg UI ----
+    st.subheader("Add Game Market Leg (Manual Lines)")
+    gm1, gm2, gm3, gm4, gm5 = st.columns([1.2, 2.2, 1.2, 1.1, 1.1])
+    with gm1:
+        gm_week = st.selectbox("Week", sorted(scores_df["week"].dropna().unique()), key="gm_week")
+    with gm2:
+        week_rows = scores_df[scores_df["week"] == gm_week]
+        matchups = [f"{r['away_team']} @ {r['home_team']}" for _, r in week_rows.iterrows()]
+        gm_match = st.selectbox("Matchup", matchups, key="gm_matchup")
+    with gm3:
+        gm_market = st.selectbox("Market", ["Spread", "Total"], key="gm_market")
+    with gm4:
+        if gm_market == "Total":
+            gm_side = st.selectbox("Side", ["over", "under"], key="gm_side_total")
+        else:
+            # for spread choose team
+            gm_side = st.selectbox("Team (spread)", ["Home", "Away"], key="gm_side_spread")
+    with gm5:
+        gm_line = st.number_input("Manual Line", value=0.0, step=0.5, key="gm_line")
+
+    if st.button("➕ Add Game Leg", use_container_width=True, key="gm_add"):
+        # Parse matchup
+        try:
+            away, home = gm_match.split(" @ ")
+        except Exception:
+            away, home = "", ""
+        if not home or not away:
+            st.warning("Select a valid matchup.")
+        else:
+            # Use model to get points for the chosen perspective
+            if gm_market == "Total":
+                t_pts, o_pts = predict_scores(scores_df, home, away)  # home vs away
+                prob = game_total_prob(t_pts, o_pts, gm_line, side=gm_side)
+                leg_label = f"{away} @ {home} Total {gm_side.title()} {gm_line:.1f}"
+            else:
+                # Spread for selected team (Home/Away) with manual line (negative favorite, positive dog)
+                if gm_side == "Home":
+                    t_pts, o_pts = predict_scores(scores_df, home, away)
+                    prob = game_spread_prob(t_pts, o_pts, gm_line)
+                    leg_label = f"{home} Spread {gm_line:+.1f}"
+                else:
+                    t_pts, o_pts = predict_scores(scores_df, away, home)  # treat chosen team as 'team' param
+                    prob = game_spread_prob(t_pts, o_pts, gm_line)
+                    leg_label = f"{away} Spread {gm_line:+.1f}"
+            st.session_state.parlay_legs.append({
+                "type": "game",
+                "label": leg_label,
+                "prob": float(prob)
+            })
+            st.rerun()
+
+    # ---- Render legs + math ----
     if st.session_state.parlay_legs:
         st.subheader("Your Legs")
         for i, leg in enumerate(st.session_state.parlay_legs):
-            c1, c2, c3, c4, c5 = st.columns([2, 1.6, 2.4, 1.4, 0.9])
-            c1.markdown(f"**{leg['player']}**")
-            c2.write(f"{leg['prop'].replace('_',' ').title()}")
-            if leg["prop"] == "anytime_td":
-                c3.write("Anytime TD")
-            else:
-                c3.write(f"{leg['side'].title()} {leg['line']}")
-            c4.write(f"Model Pr: **{leg['prob']*100:.1f}%**")
-            if c5.button("🗑 Remove", key=f"rm_any_{i}"):
+            c1, c2, c3 = st.columns([4, 2, 1])
+            c1.markdown(f"• **{leg['label']}**")
+            c2.write(f"Model Pr: **{leg['prob']*100:.1f}%**")
+            if c3.button("🗑 Remove", key=f"rm_leg_{i}"):
                 st.session_state.parlay_legs.pop(i)
                 st.rerun()
 
@@ -732,10 +797,7 @@ with st.container():
         if book_total_american.strip():
             try:
                 text = book_total_american.strip()
-                if text.startswith("+") or text.startswith("-"):
-                    book_am = float(text)
-                else:
-                    book_am = float(text)
+                book_am = float(text) if text.startswith(("+","-")) else float(text)
                 book_dec = american_to_decimal(book_am)
                 payout = stake * (book_dec - 1.0)
                 ev = parlay_hit_prob * payout - (1 - parlay_hit_prob) * stake
@@ -746,4 +808,4 @@ with st.container():
         else:
             st.metric("Model Fair Odds", f"{int(model_am_odds):+d}")
     else:
-        st.info("Add legs above to build your parlay. Choose any player, pick the prop/line/side, and select the opponent by full team name. We'll multiply model probabilities for your parlay hit rate.")
+        st.info("Add legs above to build your parlay. You can add player props (vs any opponent) and game markets (spread/total) with manual lines. We'll multiply model probabilities for your parlay hit rate.")
