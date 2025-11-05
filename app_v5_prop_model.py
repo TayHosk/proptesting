@@ -18,7 +18,7 @@ SHEETS = {
     "total_rushing": "https://docs.google.com/spreadsheets/d/14NgUntobNrL1AZg3U85yZInArFkHyf9mi1csVFodu90/export?format=csv",
     "total_scoring": "https://docs.google.com/spreadsheets/d/1SJ_Y1ljU44lOjbNHuXGyKGiF3mgQxjAjX8H3j-CCqSw/export?format=csv",
     "player_receiving": "https://docs.google.com/spreadsheets/d/1Gwb2A-a4ge7UKHnC7wUpJltgioTuCQNuwOiC5ecZReM/export?format=csv",
-    "player_rushing": "https://docs.google.com/spreadsheets/d/1c0xpi_wZS8VhkSPzzchxvhzAQHK0tFetakdRqb3e6k/export?format=csv",
+    "player_rushing": "https://docs.google.com/spreadsheets/d/1c0xpi_wZSf8VhkSPzzchxvhzAQHK0tFetakdRqb3e6k/export?format=csv",
     "player_passing": "https://docs.google.com/spreadsheets/d/1I9YNSQMylW_waJs910q4S6SM8CZE--hsyNElrJeRfvk/export?format=csv",
     "def_rb": "https://docs.google.com/spreadsheets/d/1xTP8tMnEVybu9vYuN4i6IIrI71q1j60BuqVC40fjNeY/export?format=csv",
     "def_qb": "https://docs.google.com/spreadsheets/d/1SEwUdExz7Px61FpRNQX3bUsxVFtK97JzuQhTddVa660/export?format=csv",
@@ -210,6 +210,10 @@ def detect_stat_col(df: pd.DataFrame, prop: str):
     for cand in pri:
         if cand in norm:
             return cols[norm.index(cand)]
+    # fallback: try columns containing the prop name
+    for i, c in enumerate(norm):
+        if prop.split("_")[0] in c and ("per_game" in c or "total" in c):
+            return cols[i]
     return None
 
 def pick_def_df(prop: str, pos: str, d_qb, d_rb, d_wr, d_te):
@@ -290,10 +294,13 @@ def prop_prediction_and_probs(
             if "games_played" not in d.columns:
                 d["games_played"] = 1
             td_cols = [c for c in d.columns if "td" in c and "allowed" in c]
-            d["tds_pg"] = d[td_cols].sum(axis=1) / d["games_played"].replace(0, np.nan)
+            if len(td_cols) == 0:
+                d["tds_pg"] = np.nan
+            else:
+                d["tds_pg"] = d[td_cols].sum(axis=1) / d["games_played"].replace(0, np.nan)
             if "team_key" not in d.columns:
                 d["team_key"] = d["team"].apply(team_key)
-        league_td_pg = np.nanmean([d["tds_pg"].mean() for d in def_dfs])
+        league_td_pg = np.nanmean([d["tds_pg"].mean() for d in def_dfs if "tds_pg" in d.columns])
         # determine player's team key
         player_team_key = None
         for df_ in [p_rec, p_rush, p_pass]:
@@ -313,11 +320,13 @@ def prop_prediction_and_probs(
         opp_td_list = []
         for d in def_dfs:
             mask = d["team_key"] == opp_key_for_player
-            opp_td_list.append(d.loc[mask, "tds_pg"].mean())
+            val = d.loc[mask, "tds_pg"].mean()
+            opp_td_list.append(val)
         opp_td_pg = np.nanmean(opp_td_list)
-        if np.isnan(opp_td_pg):
-            opp_td_pg = league_td_pg
-        adj_factor = (opp_td_pg / league_td_pg) if league_td_pg and league_td_pg > 0 else 1.0
+        if np.isnan(opp_td_pg) or league_td_pg is None or np.isnan(league_td_pg) or league_td_pg <= 0:
+            adj_factor = 1.0
+        else:
+            adj_factor = opp_td_pg / league_td_pg
         adj_td_rate = (total_tds / total_games) * adj_factor
         prob_anytime = 1 - np.exp(-adj_td_rate)
         prob_anytime = float(np.clip(prob_anytime, 0.0, 1.0))
@@ -411,22 +420,38 @@ def prob_to_american(p: float) -> float:
     dec = prob_to_decimal(p)
     return decimal_to_american(dec)
 
-# =========================
-# UI – Single Page with Mobile Dropdown Navigation
-# =========================
-st.title("🏈 NFL Game + Player Prop Dashboard (Mobile-Friendly)")
+# ========== Game market prob helpers ==========
+def prob_total_over_under(scores_df: pd.DataFrame, home: str, away: str, line_total: float):
+    # predict game total then compute prob that total > line
+    team_pts, opp_pts = predict_scores(scores_df, home, away)  # home vs away labeling doesn't matter for total
+    pred_total = team_pts + opp_pts
+    stdev_total = max(6.0, pred_total * 0.18)  # heuristic
+    z = (line_total - pred_total) / stdev_total
+    p_over = float(np.clip(1 - norm.cdf(z), 0.001, 0.999))
+    p_under = float(np.clip(norm.cdf(z), 0.001, 0.999))
+    return pred_total, p_over, p_under
 
-# Jump-to-section dropdown
-SECTION_OPTIONS = [
-    "1) Select Game",
-    "2) Game Prediction (Vegas-Calibrated)",
-    "3) Top Edges This Week",
-    "4) Player Props (Both Teams)",
-    "5) Parlay Builder (Model‑Driven, Any Game)",
-]
-default_ix = 0
-active_section = st.selectbox("Jump to section", SECTION_OPTIONS, index=default_ix, help="Choose which section to view. Only the selected section is expanded by default.")
+def prob_spread_cover(scores_df: pd.DataFrame, home: str, away: str, spread_home_negative: float, side: str):
+    # spread_home_negative: negative means home favored by abs(spread)
+    home_pts, away_pts = predict_scores(scores_df, home, away)
+    pred_margin = home_pts - away_pts  # home - away
+    stdev_margin = max(5.0, abs(pred_margin) * 0.9 + 6.0)  # heuristic
+    # Line is home margin (negative = home favored). To cover home, need pred_margin > -spread
+    line_margin = -spread_home_negative  # book expresses negative favorite; convert to margin target
+    z = (line_margin - pred_margin) / stdev_margin
+    p_home_cover = float(np.clip(1 - norm.cdf(z), 0.001, 0.999))
+    p_away_cover = 1.0 - p_home_cover
+    if side == "home":
+        return pred_margin, p_home_cover
+    else:
+        return pred_margin, p_away_cover
 
+# =========================
+# UI – Single Page with Mobile-Friendly Dropdown + Expanders
+# =========================
+st.title("🏈 NFL Game + Player Prop Dashboard")
+
+# Global data
 scores_df = load_scores()
 if scores_df.empty:
     st.error("Could not load NFL game data.")
@@ -436,20 +461,32 @@ player_data = load_all_player_dfs()
 p_rec, p_rush, p_pass = player_data["player_receiving"], player_data["player_rushing"], player_data["player_passing"]
 d_rb, d_qb, d_wr, d_te = player_data["def_rb"], player_data["def_qb"], player_data["def_wr"], player_data["def_te"]
 
+# Section navigation (Option B: multiple sections can stay open; dropdown just sets default expanded one)
+section_names = [
+    "1) Select Game",
+    "2) Game Prediction",
+    "3) Top Edges",
+    "4) Player Props",
+    "5) Parlay Builder"
+]
+selected_section = st.selectbox("📱 Navigate Sections", section_names, index=0, help="Choose a section to focus. You can still open others below.")
+
+expanded_default = {name: (name == selected_section) for name in section_names}
+
 # -------------------------
 # 1) Week & Team selection
 # -------------------------
-exp1 = st.expander("1) Select Game", expanded=(active_section == "1) Select Game"))
-with exp1:
-    cols = st.columns(1)
+with st.expander("1) Select Game", expanded=expanded_default["1) Select Game"]):
+    cols = st.columns([1, 1, 2])
     with cols[0]:
         week_list = sorted(scores_df["week"].dropna().unique())
-        selected_week = st.selectbox("Week", week_list, key="week_sel")
+        selected_week = st.selectbox("Week", week_list, key="week_select_main")
+    with cols[1]:
         teams_in_week = sorted(
             set(scores_df.loc[scores_df["week"] == selected_week, "home_team"].dropna().unique())
             | set(scores_df.loc[scores_df["week"] == selected_week, "away_team"].dropna().unique())
         )
-        selected_team = st.selectbox("Team", teams_in_week, key="team_sel")
+        selected_team = st.selectbox("Team", teams_in_week, key="team_select_main")
 
     # Find game row & opponent using labels from SCORE sheet
     game_row = scores_df[
@@ -466,31 +503,34 @@ with exp1:
     selected_team_key = team_key(selected_team)
     opponent_key = team_key(opponent)
 
-    st.markdown(f"**Matchup:** {selected_team} vs {opponent}")
+    with cols[2]:
+        st.markdown(f"**Matchup:** {selected_team} vs {opponent}")
 
     # Lines (pre-fill from sheet if present)
     default_ou = float(g.get("over_under", 45.0)) if pd.notna(g.get("over_under", np.nan)) else 45.0
     default_spread = float(g.get("spread", 0.0)) if pd.notna(g.get("spread", np.nan)) else 0.0
 
-    over_under = st.number_input("Over/Under (Vegas or yours)", value=default_ou, step=0.5, key="ou_input")
-    spread = st.number_input("Spread (negative = favorite)", value=default_spread, step=0.5, key="spread_input")
+    cL, cR = st.columns(2)
+    with cL:
+        over_under = st.number_input("Over/Under (Vegas or yours)", value=default_ou, step=0.5, key="main_ou")
+    with cR:
+        spread = st.number_input("Spread (negative = favorite)", value=default_spread, step=0.5, key="main_spread")
 
 # -------------------------
 # 2) Game prediction (Vegas-calibrated)
 # -------------------------
-exp2 = st.expander("2) Game Prediction (Vegas-Calibrated)", expanded=(active_section == "2) Game Prediction (Vegas-Calibrated)"))
-with exp2:
+with st.expander("2) Game Prediction", expanded=expanded_default["2) Game Prediction"]):
     team_pts, opp_pts = predict_scores(scores_df, selected_team, opponent)
     total_pred = team_pts + opp_pts
     margin = team_pts - opp_pts
     total_diff = total_pred - over_under
     spread_diff = margin - (-spread)
 
-    m1, m2, m3, m4 = st.columns(2)  # fewer columns for mobile
+    m1, m2, m3, m4 = st.columns(4)
     m1.metric(f"{selected_team} Predicted", f"{team_pts:.1f} pts")
     m2.metric(f"{opponent} Predicted", f"{opp_pts:.1f} pts")
-    st.metric("Predicted Total", f"{total_pred:.1f}", f"{total_diff:+.1f} vs O/U")
-    st.metric("Predicted Margin", f"{margin:+.1f}", f"{spread_diff:+.1f} vs Spread")
+    m3.metric("Predicted Total", f"{total_pred:.1f}", f"{total_diff:+.1f} vs O/U")
+    m4.metric("Predicted Margin", f"{margin:+.1f}", f"{spread_diff:+.1f} vs Spread")
 
     fig_total = px.bar(
         x=["Predicted Total", "Vegas O/U"],
@@ -509,8 +549,7 @@ with exp2:
 # -------------------------
 # 3) Top Edges of the Week
 # -------------------------
-exp3 = st.expander("3) Top Edges This Week", expanded=(active_section == "3) Top Edges This Week"))
-with exp3:
+with st.expander("3) Top Edges", expanded=expanded_default["3) Top Edges"]):
     wk = scores_df[scores_df["week"] == selected_week].copy()
     rows = []
     for _, r in wk.iterrows():
@@ -535,6 +574,7 @@ with exp3:
         })
     edges_df = pd.DataFrame(rows)
     if not edges_df.empty:
+        # Rank by absolute edge (take the larger of total/spread edge per row)
         def edge_rank(row):
             vals = [abs(v) for v in [row.get("Total Edge (pts)"), row.get("Spread Edge (pts)")] if pd.notna(v)]
             return max(vals) if vals else 0.0
@@ -547,8 +587,7 @@ with exp3:
 # -------------------------
 # 4) Player Props (players from both teams)
 # -------------------------
-exp4 = st.expander("4) Player Props (Both Teams)", expanded=(active_section == "4) Player Props (Both Teams)"))
-with exp4:
+with st.expander("4) Player Props", expanded=expanded_default["4) Player Props"]):
     # Build player list from both teams using canonical keys
     def players_for_team(df, team_name_or_label):
         key = team_key(team_name_or_label)
@@ -569,17 +608,22 @@ with exp4:
     )
     both_players = sorted(team_players.union(opp_players))
 
+    # Helpful message if no players found (usually a team alias mismatch)
     if not both_players:
         st.info(
             "No players found for this matchup. This often means team labels differ across sheets. "
             f"Resolved keys — Your selection: **{selected_team_key}**, Opponent: **{opponent_key}**."
         )
 
-    player_name = st.selectbox("Select Player", [""] + both_players, key="player_pick_props")
-    prop_choices = ["passing_yards", "rushing_yards", "receiving_yards", "receptions", "targets", "carries", "anytime_td"]
-    selected_prop = st.selectbox("Prop Type", prop_choices, index=2, key="prop_type_props")
-    default_line = 50.0 if selected_prop != "anytime_td" else 0.0
-    line_val = st.number_input("Sportsbook Line", value=float(default_line), key="player_line") if selected_prop != "anytime_td" else 0.0
+    c1, c2, c3 = st.columns([2, 1.2, 1.2])
+    with c1:
+        player_name = st.selectbox("Select Player", [""] + both_players, key="player_pick_props")
+    with c2:
+        prop_choices = ["passing_yards", "rushing_yards", "receiving_yards", "receptions", "targets", "carries", "anytime_td"]
+        selected_prop = st.selectbox("Prop Type", prop_choices, index=2, key="prop_type_props")
+    with c3:
+        default_line = 50.0 if selected_prop != "anytime_td" else 0.0
+        line_val = st.number_input("Sportsbook Line", value=float(default_line), key="prop_line") if selected_prop != "anytime_td" else 0.0
 
     if player_name:
         res = prop_prediction_and_probs(
@@ -606,9 +650,12 @@ with exp4:
                 use_container_width=True
             )
         else:
+            # ====== Display (season totals + games + per-game) ======
             st.subheader(selected_prop.replace("_", " ").title())
-            # Show season totals + games + per-game explicitly
-            st.write(f"**Season total:** {res['season_total']:.1f} over **{int(res['games_played'])} games** → **{res['player_pg']:.2f} per game**")
+            st.write(f"**Season Total:** {res['season_total']:.1f}")
+            st.write(f"**Games Played:** {res['games_played']:.0f}")
+            st.write(f"**Per Game (season):** {res['player_pg']:.2f}")
+            # Prediction & probabilities
             st.write(f"**Adjusted prediction (this game):** {res['predicted_pg']:.2f}")
             st.write(f"**Line:** {line_val:.1f}")
             st.write(f"**Probability of OVER:** {res['prob_over']*100:.1f}%")
@@ -626,14 +673,13 @@ with exp4:
         st.info("Select a player to evaluate props.")
 
 # -------------------------
-# 5) Parlay Builder (Any Player + Choose Opponent by Full Name)
+# 5) Parlay Builder (Any Player + Game Markets)
 # -------------------------
-exp5 = st.expander("5) Parlay Builder (Model‑Driven, Any Game)", expanded=(active_section == "5) Parlay Builder (Model‑Driven, Any Game)"))
-with exp5:
+with st.expander("5) Parlay Builder", expanded=expanded_default["5) Parlay Builder"]):
     if "parlay_legs" not in st.session_state:
-        st.session_state.parlay_legs = []  # each leg: dict(player, prop, line, side, prob)
+        st.session_state.parlay_legs = []  # each leg: dict(kind, label, prob)
 
-    # Build global player pool (any team)
+    # ===== Add PLAYER leg (any opponent via full team) =====
     def unique_players(*dfs):
         names = []
         for df in dfs:
@@ -644,11 +690,13 @@ with exp5:
     all_players = unique_players(p_rec, p_rush, p_pass)
     full_team_names = sorted(list(CODE_TO_FULLNAME.values()))
 
-    a1, a2 = st.columns(2)
+    st.markdown("**Add Player Prop Leg**")
+    a1, a2, a3, a4, a5 = st.columns([2.2, 1.6, 1.2, 1.6, 1.2])
     with a1:
         pb_player = st.selectbox("Player", [""] + all_players, key="pb_any_player")
-        pb_prop = st.selectbox("Prop", ["passing_yards", "rushing_yards", "receiving_yards", "receptions", "targets", "carries", "anytime_td"], key="pb_any_prop")
     with a2:
+        pb_prop = st.selectbox("Prop", ["passing_yards", "rushing_yards", "receiving_yards", "receptions", "targets", "carries", "anytime_td"], key="pb_any_prop")
+    with a3:
         if pb_prop == "anytime_td":
             pb_line = 0.0
             pb_side = "yes"
@@ -656,40 +704,104 @@ with exp5:
         else:
             pb_line = st.number_input("Line", value=50.0, step=0.5, key="pb_any_line")
             pb_side = st.selectbox("Side", ["over", "under"], key="pb_any_side")
-
+    with a4:
         pb_opp_full = st.selectbox("Opponent (Full Name)", full_team_names, key="pb_any_opp_full")
         pb_opp_key = FULLNAME_TO_CODE.get(pb_opp_full, "")
-
-    if st.button("➕ Add Leg", use_container_width=True, key="pb_any_add"):
-        if not pb_player:
-            st.warning("Pick a player first.")
-        elif not pb_opp_key:
-            st.warning("Pick an opponent team.")
-        else:
-            # compute model probability for this leg using explicit opponent override
-            res = prop_prediction_and_probs(
-                player_name=pb_player,
-                selected_prop=pb_prop,
-                line_val=pb_line,
-                selected_team_key="SEL",   # placeholder; not used when override provided
-                opponent_key="OPP",        # placeholder; not used when override provided
-                p_rec=p_rec, p_rush=p_rush, p_pass=p_pass,
-                d_qb=d_qb, d_rb=d_rb, d_wr=d_wr, d_te=d_te,
-                opponent_key_override=pb_opp_key
-            )
-            if "error" in res:
-                st.warning(res["error"])
+    with a5:
+        if st.button("➕ Add Player Leg", use_container_width=True, key="pb_any_add"):
+            if not pb_player:
+                st.warning("Pick a player first.")
+            elif not pb_opp_key:
+                st.warning("Pick an opponent team.")
             else:
-                if pb_prop == "anytime_td":
-                    prob = res["prob_anytime"]
+                res = prop_prediction_and_probs(
+                    player_name=pb_player,
+                    selected_prop=pb_prop,
+                    line_val=pb_line,
+                    selected_team_key="SEL",   # placeholder; not used when override provided
+                    opponent_key="OPP",        # placeholder; not used when override provided
+                    p_rec=p_rec, p_rush=p_rush, p_pass=p_pass,
+                    d_qb=d_qb, d_rb=d_rb, d_wr=d_wr, d_te=d_te,
+                    opponent_key_override=pb_opp_key
+                )
+                if "error" in res:
+                    st.warning(res["error"])
                 else:
-                    prob = res["prob_over"] if pb_side == "over" else res["prob_under"]
+                    if pb_prop == "anytime_td":
+                        prob = float(res["prob_anytime"])
+                        label = f"{pb_player} Anytime TD vs {pb_opp_full}"
+                    else:
+                        prob = float(res["prob_over"] if pb_side == "over" else res["prob_under"])
+                        label = f"{pb_player} {pb_prop.replace('_',' ').title()} {pb_side.title()} {pb_line} vs {pb_opp_full}"
+                    st.session_state.parlay_legs.append({
+                        "kind": "player",
+                        "label": label,
+                        "prob": prob
+                    })
+                    st.rerun()
+
+    st.markdown("---")
+
+    # ===== Add GAME MARKET leg (Totals or Spreads) =====
+    st.markdown("**Add Game Market Leg**")
+    g1, g2, g3, g4, g5, g6 = st.columns([1.0, 2.2, 1.6, 1.2, 1.2, 1.2])
+    with g1:
+        week_for_market = st.selectbox("Week", sorted(scores_df["week"].dropna().unique()), key="gm_week")
+    with g2:
+        wk_df = scores_df[scores_df["week"] == week_for_market]
+        matchups = []
+        meta = []
+        for _, row in wk_df.iterrows():
+            h = row.get("home_team")
+            a = row.get("away_team")
+            if pd.isna(h) or pd.isna(a):
+                continue
+            matchups.append(f"{a} @ {h}")
+            meta.append((h, a))
+        gm_match = st.selectbox("Matchup", matchups, key="gm_matchup")
+        idx = matchups.index(gm_match) if gm_match in matchups else -1
+        home_team = meta[idx][0] if idx >= 0 else None
+        away_team = meta[idx][1] if idx >= 0 else None
+    with g3:
+        gm_market = st.selectbox("Market", ["Total", "Spread"], key="gm_market")
+    with g4:
+        if gm_market == "Total":
+            default_ou_mkt = float(wk_df.iloc[0].get("over_under", 45.0)) if not wk_df.empty else 45.0
+            gm_total = st.number_input("O/U Line", value=default_ou_mkt, step=0.5, key="gm_total_line")
+            gm_side = st.selectbox("Side", ["over", "under"], key="gm_total_side")
+        else:
+            default_sp_mkt = float(wk_df.iloc[0].get("spread", 0.0)) if not wk_df.empty else 0.0
+            gm_spread = st.number_input("Home Spread (negative=favorite)", value=default_sp_mkt, step=0.5, key="gm_spread_line")
+            gm_side_spread = st.selectbox("Side", ["home", "away"], key="gm_spread_side")
+    with g5:
+        # Preview model prob for convenience
+        if gm_market == "Total" and home_team and away_team:
+            _, p_over, p_under = prob_total_over_under(scores_df, home_team, away_team, gm_total)
+            prev_prob = p_over if gm_side == "over" else p_under
+            st.metric("Model Pr.", f"{prev_prob*100:.1f}%")
+        elif gm_market == "Spread" and home_team and away_team:
+            _, p_cov = prob_spread_cover(scores_df, home_team, away_team, gm_spread, gm_side_spread)
+            st.metric("Model Pr.", f"{p_cov*100:.1f}%")
+        else:
+            st.write(" ")
+    with g6:
+        if st.button("➕ Add Game Leg", use_container_width=True, key="gm_add"):
+            if not (home_team and away_team):
+                st.warning("Pick a valid matchup.")
+            else:
+                if gm_market == "Total":
+                    _, p_over, p_under = prob_total_over_under(scores_df, home_team, away_team, gm_total)
+                    prob = float(p_over if gm_side == "over" else p_under)
+                    label = f"{away_team} @ {home_team} Total {gm_side.title()} {gm_total}"
+                else:
+                    _, p_cov = prob_spread_cover(scores_df, home_team, away_team, gm_spread, gm_side_spread)
+                    prob = float(p_cov)
+                    side_text = f"{gm_side_spread.title()} Cover {gm_spread:+.1f}"
+                    label = f"{away_team} @ {home_team} Spread {side_text}"
                 st.session_state.parlay_legs.append({
-                    "player": pb_player,
-                    "prop": pb_prop,
-                    "side": pb_side if pb_prop != "anytime_td" else "yes",
-                    "line": float(pb_line),
-                    "prob": float(prob),
+                    "kind": "game",
+                    "label": label,
+                    "prob": prob
                 })
                 st.rerun()
 
@@ -697,20 +809,14 @@ with exp5:
     if st.session_state.parlay_legs:
         st.subheader("Your Legs")
         for i, leg in enumerate(st.session_state.parlay_legs):
-            c1, c2, c3, c4, c5 = st.columns([2, 1.6, 2.0, 1.4, 0.9])
-            c1.markdown(f"**{leg['player']}**")
-            c2.write(f"{leg['prop'].replace('_',' ').title()}")
-            if leg["prop"] == "anytime_td":
-                c3.write("Anytime TD")
-            else:
-                c3.write(f"{leg['side'].title()} {leg['line']}")
-            c4.write(f"Model Pr: **{leg['prob']*100:.1f}%**")
-            if c5.button("🗑 Remove", key=f"rm_any_{i}"):
+            c1, c2 = st.columns([8, 1])
+            c1.markdown(f"• **{leg.get('label','Leg')}** — Model Pr: **{leg.get('prob',0.0)*100:.1f}%**")
+            if c2.button("🗑 Remove", key=f"rm_leg_{i}"):
                 st.session_state.parlay_legs.pop(i)
                 st.rerun()
 
         # Parlay calculations
-        probs = [leg["prob"] for leg in st.session_state.parlay_legs]
+        probs = [float(leg.get("prob", 0.0)) for leg in st.session_state.parlay_legs]
         parlay_hit_prob = float(np.prod(probs)) if probs else 0.0
         model_dec_odds = prob_to_decimal(parlay_hit_prob)
         model_am_odds = prob_to_american(parlay_hit_prob)
@@ -728,10 +834,7 @@ with exp5:
         if book_total_american.strip():
             try:
                 text = book_total_american.strip()
-                if text.startswith("+") or text.startswith("-"):
-                    book_am = float(text)
-                else:
-                    book_am = float(text)
+                book_am = float(text)
                 book_dec = american_to_decimal(book_am)
                 payout = stake * (book_dec - 1.0)
                 ev = parlay_hit_prob * payout - (1 - parlay_hit_prob) * stake
@@ -742,4 +845,4 @@ with exp5:
         else:
             st.metric("Model Fair Odds", f"{int(model_am_odds):+d}")
     else:
-        st.info("Add legs above to build your parlay. Choose any player, pick the prop/line/side, and select the opponent by full team name. We'll multiply model probabilities for your parlay hit rate.")
+        st.info("Add legs above to build your parlay. You can mix player props and game markets. We'll multiply model probabilities for your parlay hit rate.")
