@@ -592,17 +592,27 @@ with st.expander("2) Top Edges This Week", expanded=(selected_section == section
             total_badge = strength_badge(total_edge)
             total_pick = f"{total_badge} {direction}"
 
-        # Spread pick label (always show the betting number from team's perspective)
+        # Spread pick label (always show betting line based on who is favorite)
         if pd.isna(spread_edge) or pd.isna(home_spread):
             spread_pick = ""
         else:
+            # Determine which team is favored
+            if home_spread < 0:  # Home is favorite
+                fav_team = h
+                dog_team = a
+                line = home_spread
+            else:               # Away is favorite
+                fav_team = a
+                dog_team = h
+                line = -home_spread  # away favorite means home gets +spread
+
+            # Determine which side the model likes
             home_covers = mar_pred > -home_spread
             if home_covers:
-                # Home side covers at the home-based line (could be -X if fav, +X if dog)
-                pick_text = f"{h} {home_spread:+.1f}"
+                pick_text = f"{fav_team} {line:+.1f}"
             else:
-                # Away side covers; away line is the opposite sign of home line
-                pick_text = f"{a} {(-home_spread):+.1f}"
+                pick_text = f"{dog_team} {(-line):+.1f}"
+
             spread_badge = strength_badge(spread_edge)
             spread_pick = f"{spread_badge} {pick_text}"
 
