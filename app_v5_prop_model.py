@@ -172,26 +172,7 @@ def load_scores() -> pd.DataFrame:
         df["home_key"] = df["home_team"].apply(team_key)
     if "away_team" in df.columns:
         df["away_key"] = df["away_team"].apply(team_key)
-    # Normalize the favored_team column BEFORE computing home_spread
-    if "favored_team" in df.columns:
-        df["favored_team"] = df["favored_team"].astype(str).str.strip().apply(team_key)
-
-    if "home_team" in df.columns:
-        df["home_team"] = df["home_team"].astype(str).str.strip().apply(team_key)
-
-    if "away_team" in df.columns:
-        df["away_team"] = df["away_team"].astype(str).str.strip().apply(team_key)
-    # Normalize Over/Under column into float
-    if "over_under" in df.columns:
-        df["over_under"] = (
-            df["over_under"]
-            .astype(str)
-            .str.replace("O", "", regex=False)
-            .str.replace("U", "", regex=False)
-            .str.replace(" ", "")
-            .astype(float)
-    )
-    # Now safely compute home_spread
+    # derive home_spread from favored_team + spread
     if {"home_team", "favored_team", "spread"}.issubset(df.columns):
         df["home_spread"] = df.apply(compute_home_spread, axis=1)
     else:
@@ -486,9 +467,6 @@ def prob_spread_cover(scores_df: pd.DataFrame, home: str, away: str, home_spread
 st.title("🏈 New Model Dashboard")
 
 scores_df = load_scores()
-# Ensure home_spread always exists (pre-calculated or recomputed)
-if "home_spread" not in scores_df.columns or scores_df["home_spread"].isna().all():
-    scores_df["home_spread"] = scores_df.apply(compute_home_spread, axis=1)
 if scores_df.empty:
     st.error("Could not load NFL game data.")
     st.stop()
