@@ -181,7 +181,16 @@ def load_scores() -> pd.DataFrame:
 
     if "away_team" in df.columns:
         df["away_team"] = df["away_team"].astype(str).str.strip().apply(team_key)
-
+    # Normalize Over/Under column into float
+    if "over_under" in df.columns:
+        df["over_under"] = (
+            df["over_under"]
+            .astype(str)
+            .str.replace("O", "", regex=False)
+            .str.replace("U", "", regex=False)
+            .str.replace(" ", "")
+            .astype(float)
+    )
     # Now safely compute home_spread
     if {"home_team", "favored_team", "spread"}.issubset(df.columns):
         df["home_spread"] = df.apply(compute_home_spread, axis=1)
