@@ -546,7 +546,7 @@ with st.expander("1) Game Selection + Prediction", expanded=(selected_section ==
         st.plotly_chart(fig_margin, use_container_width=True)
 
 # -------------------------
-# Section 2: Top Edges of the Week (Color-Coded)
+# Section 2: Top Edges of the Week (Directional + Color-Coded)
 # -------------------------
 with st.expander("2) Top Edges This Week", expanded=(selected_section == section_names[1])):
 
@@ -557,50 +557,96 @@ with st.expander("2) Top Edges This Week", expanded=(selected_section == section
 
     st.markdown(
         f"**Week shown:** {selected_week_for_edges}  \n"
-        "🟩 = Strong play | 🟨 = Lean / Maybe | 🟥 = Stay away"
+        "Legend: 🟩 = strong play, 🟨 = lean/maybe, 🟥 = pass"
     )
 
     wk = scores_df[scores_df["week"] == selected_week_for_edges].copy()
+
+    def strength_badge(edge_val):
+        if pd.isna(edge_val):
+            return "⬜"
+        a = abs(edge_val)
+        if a >= 4:
+            return "🟩"
+        elif a >= 2:
+            return "🟨"
+        else:
+            return "🟥"
+
+    def spread_pick_text(home_team, away_team, line_home_negative, pred_margin):
+        """
+        line_home_negative: book line from sheet (negative means home favored).
+        pred_margin: model home_margin = home_pts - away_pts.
+        We 'like' HOME to cover if pred_margin > (-line). Else AWAY to cover.
+        Display as 'Team +/-line from that team's perspective'.
+        """
+        # Book expresses home line (e.g., -2.5 means home -2.5)
+        line_home = float(line_home_negative)
+
+        # Direction: which side model prefers
+        home_to_cover = pred_margin > -line_home
+
+        if home_to_cover:
+            # Home -X (if line is negative) or Home +X (if line is positive)
+            shown = f"{home_team} {line_home:+.1f}"
+        else:
+            # For away, invert the sign so it's from away perspective
+            shown = f"{away_team} {(-line_home):+.1f}"
+        return shown, home_to_cover
+
     rows = []
     for _, r in wk.iterrows():
         h, a = r.get("home_team"), r.get("away_team")
         if pd.isna(h) or pd.isna(a):
             continue
+
+        # Model predictions
         h_pts, a_pts = predict_scores(scores_df, h, a)
-        tot = h_pts + a_pts
-        mar = h_pts - a_pts
+        tot_pred = h_pts + a_pts
+        mar_pred = h_pts - a_pts  # home - away
+
+        # Book lines
         ou = float(r.get("over_under")) if pd.notna(r.get("over_under", np.nan)) else np.nan
-        sp = float(r.get("spread")) if pd.notna(r.get("spread", np.nan)) else np.nan
-        total_edge = np.nan if pd.isna(ou) else tot - ou
-        spread_edge = np.nan if pd.isna(sp) else mar - (-sp)
+        sp = float(r.get("spread")) if pd.notna(r.get("spread", np.nan)) else np.nan  # negative => home favored
+
+        # Edges
+        total_edge = np.nan if pd.isna(ou) else (tot_pred - ou)
+        spread_edge = np.nan if pd.isna(sp) else (mar_pred - (-sp))  # model margin vs book margin
+
+        # Total pick (Over/Under) + badge
+        if pd.isna(total_edge):
+            total_pick = ""
+            total_badge = "⬜"
+        else:
+            direction = "OVER" if total_edge > 0 else "UNDER"
+            total_badge = strength_badge(total_edge)
+            total_pick = f"{total_badge} {direction}"
+
+        # Spread pick (TEAM ±LINE from that team's perspective) + badge
+        if pd.isna(spread_edge) or pd.isna(sp):
+            spread_pick = ""
+            spread_badge = "⬜"
+        else:
+            shown_text, _ = spread_pick_text(h, a, sp, mar_pred)
+            spread_badge = strength_badge(spread_edge)
+            spread_pick = f"{spread_badge} {shown_text}"
 
         rows.append({
             "Matchup": f"{a} @ {h}",
-            "Pred Total": round(tot, 1),
+            "Pred Total": round(tot_pred, 1),
             "O/U": ou if not pd.isna(ou) else "",
             "Total Edge (pts)": None if pd.isna(total_edge) else round(total_edge, 1),
-            "Pred Margin": round(mar, 1),
+            "Total Pick": total_pick,
+            "Pred Margin": round(mar_pred, 1),
             "Spread": sp if not pd.isna(sp) else "",
             "Spread Edge (pts)": None if pd.isna(spread_edge) else round(spread_edge, 1),
+            "Spread Pick": spread_pick,
         })
 
     edges_df = pd.DataFrame(rows)
 
     if not edges_df.empty:
-
-        def confidence_color(val):
-            if pd.isna(val):
-                return "⬜"
-            if abs(val) >= 4:
-                return "🟩"   # Strong play
-            elif abs(val) >= 2:
-                return "🟨"   # Maybe / Lean
-            else:
-                return "🟥"   # Stay away
-
-        edges_df["Total Signal"] = edges_df["Total Edge (pts)"].apply(confidence_color)
-        edges_df["Spread Signal"] = edges_df["Spread Edge (pts)"].apply(confidence_color)
-
+        # Rank rows by the stronger of total/spread edge
         def best_edge(row):
             vals = [abs(v) for v in [row.get("Total Edge (pts)"), row.get("Spread Edge (pts)")] if pd.notna(v)]
             return max(vals) if vals else 0.0
@@ -608,7 +654,13 @@ with st.expander("2) Top Edges This Week", expanded=(selected_section == section
         edges_df["Rank Score"] = edges_df.apply(best_edge, axis=1)
         edges_df = edges_df.sort_values("Rank Score", ascending=False).drop(columns=["Rank Score"])
 
-        st.dataframe(edges_df, use_container_width=True)
+        # Present key columns first
+        display_cols = [
+            "Matchup",
+            "Pred Total", "O/U", "Total Edge (pts)", "Total Pick",
+            "Pred Margin", "Spread", "Spread Edge (pts)", "Spread Pick"
+        ]
+        st.dataframe(edges_df[display_cols], use_container_width=True)
     else:
         st.info("No games found for this week.")
 
