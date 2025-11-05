@@ -593,7 +593,7 @@ with st.expander("2) Top Edges This Week", expanded=(selected_section == section
             total_pick = f"{total_badge} {direction}"
 
         # Spread pick logic (correct favorite/underdog formatting)
-        if pd.isna(spread_edge) or pd.isna(home_spread):
+    if pd.isna(spread_edge) or pd.isna(home_spread):
     spread_pick = ""
         else:
         if home_spread < 0:
