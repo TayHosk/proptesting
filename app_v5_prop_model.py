@@ -172,7 +172,17 @@ def load_scores() -> pd.DataFrame:
         df["home_key"] = df["home_team"].apply(team_key)
     if "away_team" in df.columns:
         df["away_key"] = df["away_team"].apply(team_key)
-    # derive home_spread from favored_team + spread
+    # Normalize the favored_team column BEFORE computing home_spread
+    if "favored_team" in df.columns:
+        df["favored_team"] = df["favored_team"].astype(str).str.strip().apply(team_key)
+
+    if "home_team" in df.columns:
+        df["home_team"] = df["home_team"].astype(str).str.strip().apply(team_key)
+
+    if "away_team" in df.columns:
+        df["away_team"] = df["away_team"].astype(str).str.strip().apply(team_key)
+
+    # Now safely compute home_spread
     if {"home_team", "favored_team", "spread"}.issubset(df.columns):
         df["home_spread"] = df.apply(compute_home_spread, axis=1)
     else:
