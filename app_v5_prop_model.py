@@ -497,7 +497,7 @@ Pick the week, a game, and the model shows:
 - Where your edge is vs. Vegas  
 This is your quick, clean, matchup-level read.
 
-#### **2) Top Edges This Week**
+#### **2) Top Edges This Week** (This is still under maintance but can still make sense when you look at it. Will fix soon)
 This is the **money board**.  
 - Every game sorted by **strongest advantage**.
 - **🟩 Green** = Strong play  
