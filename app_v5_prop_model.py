@@ -469,7 +469,7 @@ def prob_spread_cover(scores_df: pd.DataFrame, home: str, away: str, home_spread
 # =========================
 # UI – Single Page
 # =========================
-st.title("🏈 WELCOME to the Official (Non-Official for legal reasons) NFL Betting Model")
+st.title("🏈 WELCOME to the Official Non-Official NFL Betting Model")
 
 scores_df = load_scores()
 if scores_df.empty:
