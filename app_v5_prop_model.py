@@ -470,7 +470,61 @@ def prob_spread_cover(scores_df: pd.DataFrame, home: str, away: str, home_spread
 # UI – Single Page
 # =========================
 st.title("🏈 WELCOME to the Official Non-Official NFL Betting Model")
+with st.expander("📘 How This Model Works", expanded=False):
+    st.markdown("""
+**Welcome to the New Model Dashboard — Where Data Picks the Winners.**
 
+This model is built to **cut through the noise** and spot betting edges that the market hasn't fully priced in yet. Instead of vibes, group chats, or ESPN narratives — we use **scoring efficiency, opponent strength, and league normalization** to project how each team *should* perform.
+
+### 🔥 Core Model Logic
+- We measure **how many points each team scores** and **how many they allow**, both home and away.
+- We blend team performance with opponent defensive tendencies to project:
+  **Home Score**, **Away Score**, **Total Points**, and **Expected Margin**.
+- Then we compare these projections to **Vegas lines** to find edges:
+  - **Total Edge** → Difference between projected total & the Over/Under.
+  - **Spread Edge** → Difference between projected margin & the spread.
+
+The **bigger the edge**, the more the model likes the bet.
+
+---
+
+### 🏈 Section Breakdown
+
+#### **1) Game Selection + Prediction**
+Pick a game, and the model shows:
+- Predicted points for each team
+- Predicted margin
+- Where your edge is vs. Vegas  
+This is your quick, clean, matchup-level read.
+
+#### **2) Top Edges This Week**
+This is the **money board**.  
+- Every game sorted by **strongest advantage**.
+- **🟩 Green** = Strong play  
+- **🟨 Yellow** = Lean  
+- **🟥 Red** = Probably pass  
+
+Spread picks are always shown in the **correct betting format** (e.g., *Broncos -3.5* or *Raiders +7*).
+
+#### **3) Player Props**
+Enter a player and stat line — the model calculates:
+- Expected performance vs opponent defense
+- Probability of **Over** and **Under**
+This helps find hidden prop value.
+
+#### **4) Parlay Builder**
+Stack legs from:
+- Game markets (spread & totals)
+- Player props
+
+The model calculates the **true probability** and your **expected value** vs sportsbook odds.
+
+---
+
+### 🎯 Goal
+This dashboard is designed to give **clarity + confidence**.
+No noise. No confusion. Just **where the edge is** — and how strong it is.
+""")
 scores_df = load_scores()
 if scores_df.empty:
     st.error("Could not load NFL game data.")
