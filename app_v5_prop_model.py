@@ -6,7 +6,7 @@ from scipy.stats import norm
 import plotly.express as px
 import re
 
-st.set_page_config(page_title="NFL Betting Model", layout="wide")
+st.set_page_config(page_title="New Model Dashboard", layout="wide")
 
 # =========================
 # Data Sources (Google Sheets)
@@ -469,9 +469,7 @@ def prob_spread_cover(scores_df: pd.DataFrame, home: str, away: str, home_spread
 # =========================
 # UI – Single Page
 # =========================
-st.title("🏈 WELCOME to the Official Non-Official NFL Betting Model")
-with st.expander("📘 How This Model Works", expanded=False):
-    st.markdown("""
+st.title("🏈 New Model Dashboard")
 
 scores_df = load_scores()
 if scores_df.empty:
