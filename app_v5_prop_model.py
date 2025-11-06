@@ -476,6 +476,8 @@ with st.expander("📘 How This Model Works", expanded=False):
 
 This model is built to **cut through the noise** and spot betting edges that the market hasn't fully priced in yet. Instead of vibes, group chats, or ESPN narratives — we use **scoring efficiency, opponent strength, and league normalization** to project how each team *should* perform.
 
+Here’s how it works:
+
 ### 🔥 Core Model Logic
 - We measure **how many points each team scores** and **how many they allow**, both home and away.
 - We blend team performance with opponent defensive tendencies to project:
@@ -494,11 +496,11 @@ The **bigger the edge**, the more the model likes the bet.
 Pick a game, and the model shows:
 - Predicted points for each team
 - Predicted margin
-- Where your edge is vs. Vegas  
+- Where your edge is vs. Vegas
 This is your quick, clean, matchup-level read.
 
 #### **2) Top Edges This Week**
-This is the **money board**.  
+This is the **money board**.
 - Every game sorted by **strongest advantage**.
 - **🟩 Green** = Strong play  
 - **🟨 Yellow** = Lean  
@@ -510,21 +512,21 @@ Spread picks are always shown in the **correct betting format** (e.g., *Broncos 
 Enter a player and stat line — the model calculates:
 - Expected performance vs opponent defense
 - Probability of **Over** and **Under**
-This helps find hidden prop value.
+This helps find hidden prop value, especially where matchup matters more than season averages.
 
 #### **4) Parlay Builder**
 Stack legs from:
 - Game markets (spread & totals)
 - Player props
+And the model calculates the **true probability** and your **expected value** vs the sportsbook odds.
 
-The model calculates the **true probability** and your **expected value** vs sportsbook odds.
+If the model’s fair odds are **better than the book** → that’s a +EV play.
 
 ---
 
 ### 🎯 Goal
 This dashboard is designed to give **clarity + confidence**.
 No noise. No confusion. Just **where the edge is** — and how strong it is.
-""")
 scores_df = load_scores()
 if scores_df.empty:
     st.error("Could not load NFL game data.")
