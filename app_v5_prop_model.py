@@ -469,12 +469,12 @@ def prob_spread_cover(scores_df: pd.DataFrame, home: str, away: str, home_spread
 # =========================
 # UI – Single Page
 # =========================
-st.title("🏈 New Model Dashboard")
+st.title("🏈 The Officially un-official NFL Betting Model")
 with st.expander("📘 How This Model Works", expanded=False):
     st.markdown("""
 **Welcome to the New Model Dashboard — Where Data Picks the Winners.**
 
-This model is built to **cut through the noise** and spot betting edges that the market hasn't fully priced in yet. Instead of vibes, group chats, or ESPN narratives — we use **scoring efficiency, opponent strength, and league normalization** to project how each team *should* perform.
+This model is built to **cut through the noise** and spot betting edges that the market hasn't fully priced in yet. Instead of vibes, group chats, or ESPN narratives — we use **scoring efficiency, opponent strength, and league normalization** to project how each team *SHOULD* perform.
 
 ### 🔥 Core Model Logic
 - We measure **how many points each team scores** and **how many they allow**, both home and away.
@@ -491,7 +491,7 @@ The **bigger the edge**, the more the model likes the bet.
 ### 🏈 Section Breakdown
 
 #### **1) Game Selection + Prediction**
-Pick a game, and the model shows:
+Pick the week, a game, and the model shows:
 - Predicted points for each team
 - Predicted margin
 - Where your edge is vs. Vegas  
@@ -507,7 +507,7 @@ This is the **money board**.
 Spread picks are always shown in the **correct betting format** (e.g., *Broncos -3.5* or *Raiders +7*).
 
 #### **3) Player Props**
-Enter a player and stat line — the model calculates:
+This corelates with section. Once you entered in a game for section 1, you can enter a player and stat line — the model calculates:
 - Expected performance vs opponent defense
 - Probability of **Over** and **Under**
 This helps find hidden prop value.
@@ -523,7 +523,7 @@ The model calculates the **true probability** and your **expected value** vs spo
 
 ### 🎯 Goal
 This dashboard is designed to give **clarity + confidence**.
-No noise. No confusion. Just **where the edge is** — and how strong it is.
+No noise. No confusion. Just **where the edge is** — and how strong it is. (This is not financial advice. Bet responsibly and stick to your units)
 """)
 scores_df = load_scores()
 if scores_df.empty:
