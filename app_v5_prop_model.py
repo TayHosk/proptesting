@@ -1,18 +1,24 @@
-
-# New Model Dashboard (single-file, with PFR scraper)
-# --------------------------------------------------
-# How to run:
-#   streamlit run New_Model_Dashboard.py
+# New Model Dashboard (single-file, hybrid: PFR scraper + Google Sheets fallback)
+# -------------------------------------------------------------------------------
+# How to run locally:
+#   1) pip install streamlit pandas numpy scipy plotly requests beautifulsoup4 lxml
+#   2) streamlit run New_Model_Dashboard.py
 #
-# This single file includes:
-# - Scraper for Pro-Football-Reference (season totals + defense-vs-position + team PF/PA)
-# - Local CSV persistence at data/pfr_2025/
-# - Streamlit app that uses local CSVs if present; fallback to your Google Sheets
+# What's inside:
+#   - Robust Pro-Football-Reference (PFR) scraper for 2025 season tables you listed
+#     * Works with PFR's comment-wrapped tables (no JS needed)
+#     * Retries with randomized user-agent to reduce 403s
+#   - Local CSV cache at data/pfr_2025/
+#   - App uses PFR CSVs if present; otherwise falls back to your Google Sheets
+#   - Sections: Game Prediction, Top Edges, Player Props, Parlay Builder
 #
-# Notes:
-# - The scraper targets 2025 season pages you provided.
-# - Use the sidebar "Refresh from Pro-Football-Reference (2025)" to pull fresh CSVs.
-# - App sections: Game Prediction, Top Edges, Player Props, Parlay Builder.
+# Notes for spreads:
+#   - Your sheet columns are exactly: home_team, away_team, favored_team, spread, over_under
+#   - We normalize the line to **HOME-BASED** format:
+#       home_spread = -abs(spread) if home is favored
+#       home_spread = +abs(spread) if away is favored
+#   - "Spread Pick" prints the team *with the same signed line you’d see at the book*
+#     (e.g., "Broncos -9.5" if home is favored and model likes home).
 #
 import os
 import io
@@ -29,15 +35,12 @@ import numpy as np
 from scipy.stats import norm
 import plotly.express as px
 import streamlit as st
+from bs4 import BeautifulSoup, Comment
 
 # =========================
 # Scraper (inline)
 # =========================
 SEASON = 2025
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/122.0 Safari/537.36"
-}
 BASE = f"https://www.pro-football-reference.com/years/{SEASON}"
 URLS = {
     "fpa_rb": f"{BASE}/fantasy-points-against-RB.htm",
@@ -52,6 +55,25 @@ URLS = {
 DEFAULT_OUT_DIR = os.path.join("data", f"pfr_{SEASON}")
 os.makedirs(DEFAULT_OUT_DIR, exist_ok=True)
 
+# Rotating user-agents to reduce chance of 403s
+UA_LIST = [
+    # Common desktop UAs
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+]
+
+def _headers():
+    return {
+        "User-Agent": random.choice(UA_LIST),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Connection": "keep-alive",
+    }
+
 TEAM_NAME_TO_CODE = {
     "Arizona Cardinals":"ARI","Atlanta Falcons":"ATL","Baltimore Ravens":"BAL","Buffalo Bills":"BUF",
     "Carolina Panthers":"CAR","Chicago Bears":"CHI","Cincinnati Bengals":"CIN","Cleveland Browns":"CLE",
@@ -65,40 +87,93 @@ TEAM_NAME_TO_CODE = {
 }
 
 def _normalize_header(c: str) -> str:
-    c = (c or "").strip().lower()
+    c = (c or "").strip()
+    c = c.replace("\xa0", " ")
+    c = c.lower()
     c = c.replace("%", "pct").replace("/", "_").replace(" ", "_")
     c = re.sub(r"[^0-9a-z_]", "", c)
     c = re.sub(r"_+", "_", c)
     return c
 
-def _http_get(url: str) -> bytes:
-    r = requests.get(url, headers=HEADERS, timeout=30)
-    r.raise_for_status()
-    return r.content
+def _http_get(url: str, max_retries: int = 4, backoff: float = 1.0) -> str:
+    """
+    Robust GET with rotating UAs + small randomized backoff.
+    Returns decoded HTML (str). Raises on failure after retries.
+    """
+    last_err = None
+    for i in range(max_retries):
+        try:
+            r = requests.get(url, headers=_headers(), timeout=30)
+            # Some PFR pages return 200 but set anti-scrape; parsing still works via comments.
+            if r.status_code == 200:
+                # Use text to preserve encoding
+                return r.text
+            last_err = RuntimeError(f"HTTP {r.status_code}")
+        except Exception as e:
+            last_err = e
+        # backoff with jitter
+        time.sleep(backoff * (1.0 + random.random()))
+    raise RuntimeError(f"Failed GET {url}: {last_err}")
 
-def _read_main_table_from_html(content: bytes) -> pd.DataFrame:
-    # pandas.read_html handles PFR's comment-wrapped tables
-    tables = pd.read_html(io.BytesIO(content), flavor="lxml")
+def _read_main_table_from_html(html: str) -> pd.DataFrame:
+    """
+    PFR frequently wraps tables in HTML comments. This parses both commented and visible tables.
+    Prefers the largest table by area.
+    """
+    soup = BeautifulSoup(html, "lxml")
+
+    tables = []
+
+    # 1) Comment-wrapped tables
+    for c in soup.find_all(string=lambda text: isinstance(text, Comment)):
+        try:
+            frag = BeautifulSoup(c, "lxml")
+            t = frag.find("table")
+            if t is not None:
+                tables.append(pd.read_html(str(t))[0])
+        except Exception:
+            pass
+
+    # 2) Fallback to visible tables
+    if not tables:
+        try:
+            tables = pd.read_html(html)
+        except Exception:
+            tables = []
+
+    if not tables:
+        raise RuntimeError("No parseable table found in HTML.")
+
+    # pick largest table
     df = max(tables, key=lambda t: t.shape[0] * t.shape[1])
-    if df.columns.tolist() and isinstance(df.columns[0], tuple):
-        df.columns = df.columns.droplevel(0)
-    if df.columns.dtype == "object":
-        mask_header = df.iloc[:,0].astype(str) == str(df.columns[0])
+
+    # Normalize multiindex
+    if df.columns.tolist() and hasattr(df.columns, "droplevel"):
+        try:
+            df.columns = df.columns.droplevel(0)
+        except Exception:
+            pass
+
+    # Drop any repeated header rows
+    if len(df) and isinstance(df.columns[0], str):
+        mask_header = df.iloc[:, 0].astype(str) == str(df.columns[0])
         df = df[~mask_header]
+
     df.columns = [_normalize_header(c) for c in df.columns]
-    return df
+    # Drop unnamed columns
+    df = df.loc[:, ~pd.Series(df.columns).astype(str).str.contains("unnamed")]
+    return df.reset_index(drop=True)
 
 def _clean_player_name(s: str) -> str:
     if pd.isna(s): return ""
     s = str(s)
-    s = re.sub(r"[\*\+]+", "", s)         # remove star/plus markers
+    s = re.sub(r"[\*\+]+", "", s)         # star/plus markers
     s = re.sub(r"\s+\(.+\)$", "", s)      # footnote suffix
     s = re.sub(r"\s{2,}", " ", s).strip()
     return s
 
 def _team_to_code(s: str) -> str:
-    s = str(s)
-    return TEAM_NAME_TO_CODE.get(s, s)
+    return TEAM_NAME_TO_CODE.get(str(s), str(s))
 
 def _coerce_float(s):
     try:
@@ -114,44 +189,47 @@ def scrape_defense_allowed_by_position():
         ("RB", URLS["fpa_rb"]), ("WR", URLS["fpa_wr"]),
         ("TE", URLS["fpa_te"]), ("QB", URLS["fpa_qb"])
     ]:
-        content = _http_get(url)
-        df = _read_main_table_from_html(content)
+        html = _http_get(url)
+        df = _read_main_table_from_html(html)
+
         if "tm" in df.columns:
-            df.rename(columns={"tm":"team"}, inplace=True)
+            df.rename(columns={"tm": "team"}, inplace=True)
         if "team" not in df.columns:
             df.rename(columns={df.columns[0]: "team"}, inplace=True)
-        df = df[~df["team"].astype(str).str.contains("AFC|NFC|League", na=False)]
+
+        # remove totals / conference rows
+        df = df[~df["team"].astype(str).str.contains("AFC|NFC|League", na=False)].copy()
         df["team_key"] = df["team"].map(_team_to_code)
 
         if pos_key == "RB":
             candidates = {
                 "games_played": ["g"],
-                "rushing_yards_allowed": ["rushing_yds","rush_yds","yds_rush"],
-                "rushing_tds_allowed": ["rushing_td","rush_td","td_rush"],
-                "receptions_allowed": ["rec","receptions"],
-                "receiving_yards_allowed": ["rec_yds","receiving_yds","yds_rec"],
-                "receiving_tds_allowed": ["rec_td","receiving_td","td_rec"],
+                "rushing_yards_allowed": ["rushing_yds", "rush_yds", "yds_rush"],
+                "rushing_tds_allowed": ["rushing_td", "rush_td", "td_rush"],
+                "receptions_allowed": ["rec", "receptions"],
+                "receiving_yards_allowed": ["rec_yds", "receiving_yds", "yds_rec"],
+                "receiving_tds_allowed": ["rec_td", "receiving_td", "td_rec"],
             }
         elif pos_key == "WR":
             candidates = {
                 "games_played": ["g"],
-                "receptions_allowed": ["rec","receptions"],
-                "receiving_yards_allowed": ["rec_yds","receiving_yds","yds_rec"],
-                "receiving_tds_allowed": ["rec_td","receiving_td","td_rec"],
+                "receptions_allowed": ["rec", "receptions"],
+                "receiving_yards_allowed": ["rec_yds", "receiving_yds", "yds_rec"],
+                "receiving_tds_allowed": ["rec_td", "receiving_td", "td_rec"],
             }
         elif pos_key == "TE":
             candidates = {
                 "games_played": ["g"],
-                "receptions_allowed": ["rec","receptions"],
-                "receiving_yards_allowed": ["rec_yds","receiving_yds","yds_rec"],
-                "receiving_tds_allowed": ["rec_td","receiving_td","td_rec"],
+                "receptions_allowed": ["rec", "receptions"],
+                "receiving_yards_allowed": ["rec_yds", "receiving_yds", "yds_rec"],
+                "receiving_tds_allowed": ["rec_td", "receiving_td", "td_rec"],
             }
         else:  # QB
             candidates = {
                 "games_played": ["g"],
-                "passing_yards_allowed": ["pass_yds","passing_yds","yds_pass"],
-                "passing_tds_allowed": ["pass_td","passing_td","td_pass"],
-                "ints_made": ["int","ints"],
+                "passing_yards_allowed": ["pass_yds", "passing_yds", "yds_pass"],
+                "passing_tds_allowed": ["pass_td", "passing_td", "td_pass"],
+                "ints_made": ["int", "ints"],
             }
 
         colmap = {}
@@ -162,19 +240,20 @@ def scrape_defense_allowed_by_position():
                     colmap[out_name] = c
                     break
 
-        keep = ["team","team_key"] + list(colmap.values())
+        keep = ["team", "team_key"] + list(colmap.values())
         keep_existing = [c for c in keep if c in df.columns]
         dfo = df[keep_existing].copy()
-        inv = {v:k for k,v in colmap.items()}
+        inv = {v: k for k, v in colmap.items()}
         dfo.rename(columns=inv, inplace=True)
 
         for c in dfo.columns:
-            if c in ("team","team_key"): continue
+            if c in ("team", "team_key"): 
+                continue
             dfo[c] = dfo[c].apply(_coerce_float)
 
         if "games_played" in dfo.columns:
             gp = dfo["games_played"].replace(0, pd.NA)
-            for metric in [c for c in dfo.columns if c not in ("team","team_key","games_played")]:
+            for metric in [c for c in dfo.columns if c not in ("team", "team_key", "games_played")]:
                 dfo[f"{metric}_pg"] = dfo[metric] / gp
 
         out[pos_key] = dfo.reset_index(drop=True)
@@ -182,31 +261,33 @@ def scrape_defense_allowed_by_position():
 
 def scrape_players_totals():
     out = {}
-    for key in ("passing","rushing","receiving"):
-        content = _http_get(URLS[key])
-        df = _read_main_table_from_html(content)
+    for key in ("passing", "rushing", "receiving"):
+        html = _http_get(URLS[key])
+        df = _read_main_table_from_html(html)
+
         if "player" not in df.columns:
-            df.rename(columns={df.columns[0]:"player"}, inplace=True)
+            df.rename(columns={df.columns[0]: "player"}, inplace=True)
         if "tm" in df.columns and "team" not in df.columns:
-            df.rename(columns={"tm":"team"}, inplace=True)
+            df.rename(columns={"tm": "team"}, inplace=True)
         if "g" in df.columns and "games_played" not in df.columns:
-            df.rename(columns={"g":"games_played"}, inplace=True)
+            df.rename(columns={"g": "games_played"}, inplace=True)
 
         df["player"] = df["player"].astype(str).map(_clean_player_name)
         df["team"] = df["team"].astype(str)
-        df = df[(df["player"]!="") & (~df["team"].isin(["TM","2TM","3TM","4TM"]))]
+        df = df[(df["player"] != "") & (~df["team"].isin(["TM", "2TM", "3TM", "4TM"]))].copy()
         df["team_key"] = df["team"].map(lambda t: TEAM_NAME_TO_CODE.get(t, t))
 
         for c in df.columns:
-            if c in ("player","team","team_key","position"):
+            if c in ("player", "team", "team_key", "position"):
                 continue
             df[c] = df[c].apply(_coerce_float)
+
         out[key] = df.reset_index(drop=True)
     return out
 
 def scrape_team_opp_summary():
-    content = _http_get(URLS["opp"])
-    df = _read_main_table_from_html(content)
+    html = _http_get(URLS["opp"])
+    df = _read_main_table_from_html(html)
     if "team" not in df.columns:
         df.rename(columns={df.columns[0]: "team"}, inplace=True)
     df = df[~df["team"].astype(str).str.contains("AFC|NFC|League", na=False)].copy()
@@ -214,16 +295,17 @@ def scrape_team_opp_summary():
 
     rename = {}
     for src, dst in [
-        ("pts","points_for"), ("points","points_for"),
-        ("pts_opp","points_against"), ("points_opp","points_against"),
-        ("g","games_played"),
+        ("pts", "points_for"), ("points", "points_for"),
+        ("pts_opp", "points_against"), ("points_opp", "points_against"),
+        ("g", "games_played"),
     ]:
         if src in df.columns:
             rename[src] = dst
     df.rename(columns=rename, inplace=True)
 
     for c in df.columns:
-        if c in ("team","team_key"): continue
+        if c in ("team", "team_key"):
+            continue
         df[c] = df[c].apply(_coerce_float)
 
     if "games_played" in df.columns:
@@ -237,6 +319,7 @@ def scrape_team_opp_summary():
 
 def scrape_all(out_dir: str = DEFAULT_OUT_DIR) -> dict:
     os.makedirs(out_dir, exist_ok=True)
+
     def_pos = scrape_defense_allowed_by_position()
     def_pos["RB"].to_csv(os.path.join(out_dir, "def_rb.csv"), index=False)
     def_pos["WR"].to_csv(os.path.join(out_dir, "def_wr.csv"), index=False)
@@ -263,10 +346,11 @@ def scrape_all(out_dir: str = DEFAULT_OUT_DIR) -> dict:
     }
 
 # =========================
-# App Config + Fallback Google Sheets
+# App Config + Fallback Google Sheets (Hybrid)
 # =========================
 st.set_page_config(page_title="New Model Dashboard", layout="wide")
 
+# Your Google Sheets fallbacks
 SCORE_URL = "https://docs.google.com/spreadsheets/d/1KrTQbR5uqlBn2v2Onpjo6qHFnLlrqIQBzE52KAhMYcY/export?format=csv"
 SHEETS = {
     "total_offense": "https://docs.google.com/spreadsheets/d/1DFZRqOiMXbIoEeLaNaWh-4srxeWaXscqJxIAHt9yq48/export?format=csv",
@@ -278,7 +362,7 @@ SHEETS = {
     "player_passing": "https://docs.google.com/spreadsheets/d/1I9YNSQMylW_waJs910q4S6SM8CZE--hsyNElrJeRfvk/export?format=csv",
     "def_rb": "https://docs.google.com/spreadsheets/d/1xTP8tMnEVybu9vYuN4i6IIrI71q1j60BuqVC40fjNeY/export?format=csv",
     "def_qb": "https://docs.google.com/spreadsheets/d/1SEwUdExz7Px61FpRNQX3bUsxVFtK97JzuQhTddVa660/export?format=csv",
-    "def_wr": "https://docs.google.com/spreadsheets/d/14klXrrHHCLlXhXW6-F-9eJIz3dkp_ROXVSeehlM8TYAo/export?format=csv",
+    "def_wr": "https://docs.google.com/spreadsheets/d/14klXrrHHCLlXhW6-F-9eJIz3dkp_ROXVSeehlM8TYAo/export?format=csv",
     "def_te": "https://docs.google.com/spreadsheets/d/1yMpgtx1ObYLDVufTMR5Se3KrMi1rG6UzMzLcoptwhi4/export?format=csv",
 }
 
@@ -344,12 +428,12 @@ def normalize_header(name: str) -> str:
 def load_scores() -> pd.DataFrame:
     df = pd.read_csv(SCORE_URL)
     df.columns = [normalize_header(c) for c in df.columns]
-    # Expecting columns exactly: home_team, away_team, favored_team, spread, over_under
+    # Expecting columns exactly: home_team, away_team, favored_team, spread, over_under (week optional)
     return df
 
 def _read_csv_auto(local_path: str, backup_url: str) -> pd.DataFrame:
     try:
-        if os.path.exists(local_path):
+        if local_path and os.path.exists(local_path):
             return pd.read_csv(local_path)
         return pd.read_csv(backup_url)
     except Exception:
@@ -370,6 +454,9 @@ def load_all_player_dfs():
     dfs = {}
     for key, backup_url in SHEETS.items():
         df = _read_csv_auto(LOCAL.get(key, ""), backup_url)
+        if df.empty:
+            dfs[key] = df
+            continue
         df.columns = [normalize_header(c) for c in df.columns]
         if "team" in df.columns:
             df["team"] = df["team"].astype(str).str.strip()
@@ -391,7 +478,7 @@ def avg_scoring(df: pd.DataFrame, team_label: str):
     return np.nanmean([scored_home, scored_away]), np.nanmean([allowed_home, allowed_away])
 
 def predict_scores(df: pd.DataFrame, home_label: str, away_label: str):
-    # We use your simple calibration method (can be swapped later)
+    # Simple calibration method (can be upgraded later)
     home_scored, home_allowed = avg_scoring(df, home_label)
     away_scored, away_allowed = avg_scoring(df, away_label)
     raw_home = (home_scored + away_allowed) / 2
@@ -400,7 +487,7 @@ def predict_scores(df: pd.DataFrame, home_label: str, away_label: str):
     cal = 22.3 / league_avg_pts if league_avg_pts and league_avg_pts > 0 else 1.0
     return float(raw_home * cal if not np.isnan(raw_home) else 22.3), float(raw_away * cal if not np.isnan(raw_away) else 22.3)
 
-# ===== Prop helpers (unchanged behavior) =====
+# ===== Prop helpers =====
 def find_player_in(df: pd.DataFrame, player_name: str):
     if "player" not in df.columns: return None
     mask = df["player"].astype(str).str.lower() == str(player_name).lower()
@@ -652,8 +739,13 @@ if scores_df.empty:
     st.stop()
 
 player_data = load_all_player_dfs()
-p_rec, p_rush, p_pass = player_data.get("player_receiving", pd.DataFrame()), player_data.get("player_rushing", pd.DataFrame()), player_data.get("player_passing", pd.DataFrame())
-d_rb, d_qb, d_wr, d_te = player_data.get("def_rb", pd.DataFrame()), player_data.get("def_qb", pd.DataFrame()), player_data.get("def_wr", pd.DataFrame()), player_data.get("def_te", pd.DataFrame())
+p_rec  = player_data.get("player_receiving", pd.DataFrame())
+p_rush = player_data.get("player_rushing", pd.DataFrame())
+p_pass = player_data.get("player_passing", pd.DataFrame())
+d_rb   = player_data.get("def_rb", pd.DataFrame())
+d_qb   = player_data.get("def_qb", pd.DataFrame())
+d_wr   = player_data.get("def_wr", pd.DataFrame())
+d_te   = player_data.get("def_te", pd.DataFrame())
 
 section_names = [
     "1) Game Selection + Prediction",
@@ -703,6 +795,7 @@ with st.expander("1) Game Selection + Prediction", expanded=(selected_section ==
             st.markdown(f"**Matchup:** {away} @ {home}")
 
         default_ou = float(g.get("over_under", 45.0)) if pd.notna(g.get("over_under", np.nan)) else 45.0
+
         # Convert favored_team + spread into HOME-BASED spread (negative if home is favored)
         fav = str(g.get("favored_team", "")).strip()
         raw_spread = float(g.get("spread", 0.0)) if pd.notna(g.get("spread", np.nan)) else 0.0
@@ -789,25 +882,19 @@ with st.expander("2) Top Edges This Week", expanded=(selected_section == section
         # Total pick
         if pd.isna(total_edge):
             total_pick = ""
-            total_badge = "⬜"
         else:
             direction = "OVER" if total_edge > 0 else "UNDER"
-            total_badge = strength_badge(total_edge)
-            total_pick = f"{total_badge} {direction}"
+            total_pick = f"{strength_badge(total_edge)} {direction}"
 
         # Spread pick — show number as book shows it (home format)
         if pd.isna(spread_edge) or pd.isna(home_spread):
             spread_pick = ""
-            spread_badge = "⬜"
         else:
             if mar_pred > -home_spread:
-                # Home covers the home_spread (which might be negative like -9.5)
                 spread_pick_text = f"{h} {home_spread:+.1f}"
             else:
-                # Away covers; from away perspective line is opposite sign
                 spread_pick_text = f"{a} {(-home_spread):+.1f}"
-            spread_badge = strength_badge(spread_edge)
-            spread_pick = f"{spread_badge} {spread_pick_text}"
+            spread_pick = f"{strength_badge(spread_edge)} {spread_pick_text}"
 
         rows.append({
             "Matchup": f"{a} @ {h}",
@@ -858,7 +945,7 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
         else:
             g = game_row.iloc[0]
             home, away = g["home_team"], g["away_team"]
-            # Build player list for both teams (by team_key matching if present)
+
             def players_for_team(df, team_name_or_label):
                 key = team_key(team_name_or_label)
                 if "team_key" not in df.columns or "player" not in df.columns:
@@ -883,8 +970,7 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
                 line_val = st.number_input("Sportsbook Line", value=float(default_line), key="prop_line") if selected_prop != "anytime_td" else 0.0
 
             if player_name:
-                # Determine opponent_key from context (player may be on home or away)
-                selected_team_key = team_key(home)  # use home as "selected" anchor
+                selected_team_key = team_key(home)  # anchor on home for opponent logic
                 opponent_key = team_key(away)
                 res = prop_prediction_and_probs(
                     player_name=player_name,
