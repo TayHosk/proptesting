@@ -684,7 +684,7 @@ def decimal_to_american(dec: float) -> float:
 
 def prob_to_decimal(p: float) -> float:
     p = float(np.clip(p, 1e-6, 1-1e-6))
-    return 1.0 / (1.0 - p + 1e-12)
+    return 1.0 / (1.0 - p + 1e-6)
 
 def prob_to_american(p: float) -> float:
     dec = prob_to_decimal(p)
