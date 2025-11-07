@@ -1,8 +1,9 @@
-beautifulsoup4
-lxml
+streamlit
 pandas
 numpy
 requests
 scipy
 plotly
-streamlit
+beautifulsoup4
+lxml
+html5lib
