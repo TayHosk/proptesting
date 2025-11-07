@@ -36,6 +36,7 @@ from scipy.stats import norm
 import plotly.express as px
 import streamlit as st
 from bs4 import BeautifulSoup, Comment
+pip install beautifulsoup4 lxml
 
 # =========================
 # Scraper (inline)
