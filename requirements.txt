@@ -1,7 +1,8 @@
-streamlit
-pandas
-numpy
-scipy
-plotly
 beautifulsoup4
 lxml
+pandas
+numpy
+requests
+scipy
+plotly
+streamlit
