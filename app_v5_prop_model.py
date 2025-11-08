@@ -159,16 +159,6 @@ def parse_cover_result(val: str):
         return "did not cover"
     return None
 
-def extract_score_from_result(val: str) -> str:
-    """From 'L, 20-24' or 'W, 27 - 21' -> '20-24'"""
-    if pd.isna(val):
-        return ""
-    s = str(val)
-    m = re.search(r'(\d+)\s*-\s*(\d+)', s)
-    if m:
-        return f"{m.group(1)}-{m.group(2)}"
-    return ""
-
 # =========================
 # Loaders
 # =========================
@@ -262,7 +252,7 @@ def load_team_game_log(url: str) -> pd.DataFrame:
     idx = find_col(norm_cols, ["did_they_cover_the_spread"], contains_ok=True)
     if idx is not None: mapper["cover_result"] = df.columns[idx]
 
-    # Also grab Result (e.g., 'W, 27-21')
+    # Your "Result" column (like "W, 24-20")
     idx = find_col(norm_cols, ["result"], contains_ok=True)
     if idx is not None: mapper["result"] = df.columns[idx]
 
@@ -297,10 +287,6 @@ def load_team_game_log(url: str) -> pd.DataFrame:
     if "cover_result" in out.columns:
         out["cover_result_norm"] = out["cover_result"].apply(parse_cover_result)
 
-    # Extract a clean score string like '20-24' from the 'result' column if present
-    if "result" in out.columns:
-        out["score"] = out["result"].apply(extract_score_from_result)
-
     return out
 
 # =========================
@@ -324,7 +310,58 @@ def predict_scores(df: pd.DataFrame, team_label: str, opponent_label: str):
     opp_pts = float(raw_opp_pts * cal_factor) if pd.notna(raw_opp_pts) else 22.3
     return team_pts, opp_pts
 
-# ===== Player prop helpers =====
+# ===== Team Log Adjustment Helpers =====
+def team_log_summary(team_log_df: pd.DataFrame, team_abbr: str, last_n:int=0):
+    if team_log_df is None or team_log_df.empty:
+        return {"ou_over":0,"ou_under":0,"cover_yes":0,"cover_no":0,"games":0}
+    sub = team_log_df.copy()
+    sub = sub[sub.get("team","") == team_abbr]
+    if "date" in sub.columns:
+        sub = sub.sort_values("date")
+    if last_n and last_n > 0:
+        sub = sub.tail(last_n)
+
+    ou_over = ou_under = 0
+    if "ou_result_norm" in sub.columns:
+        vals = sub["ou_result_norm"].dropna().astype(str).str.lower()
+        ou_over = int((vals == "over").sum())
+        ou_under = int((vals == "under").sum())
+
+    cover_yes = cover_no = 0
+    if "cover_result_norm" in sub.columns:
+        cvals = sub["cover_result_norm"].dropna().astype(str).str.lower()
+        cover_yes = int((cvals == "covered").sum())
+        cover_no = int((cvals == "did not cover").sum())
+
+    games = len(sub)
+    return {"ou_over":ou_over,"ou_under":ou_under,"cover_yes":cover_yes,"cover_no":cover_no,"games":games}
+
+def ou_adjustment_from_rates(team_log_df, home_abbr, away_abbr, weight_points: float=4.0, last_n:int=0):
+    def rate(team):
+        s = team_log_summary(team_log_df, team, last_n=last_n)
+        tot = s["ou_over"] + s["ou_under"]
+        if tot == 0:
+            return 0.0
+        return (s["ou_over"]/tot) - 0.5  # positive => tends to OVER
+    adj_home = rate(home_abbr) * weight_points
+    adj_away = rate(away_abbr) * weight_points
+    # combine both tendencies into a single total adjustment
+    return (adj_home + adj_away) / 2.0
+
+def spread_adjustment_from_rates(team_log_df, home_abbr, away_abbr, weight_points: float=3.0, last_n:int=0):
+    # Positive -> nudges margin toward that team
+    def bias(team):
+        s = team_log_summary(team_log_df, team, last_n=last_n)
+        tot = s["cover_yes"] + s["cover_no"]
+        if tot == 0:
+            return 0.0
+        return (s["cover_yes"]/tot) - 0.5  # positive means covers more than 50%
+    home_bias = bias(home_abbr) * weight_points
+    away_bias = bias(away_abbr) * weight_points
+    # Margin is home - away. If away has strong cover tendency, nudge margin down.
+    return home_bias - away_bias
+
+# ===== Player prop helpers (kept same structure) =====
 def find_player_in(df: pd.DataFrame, player_name: str):
     if "player" not in df.columns:
         return None
@@ -565,8 +602,7 @@ We project team scoring using historical efficiency and calibrate to league scor
 then compare to Vegas lines to find edges on totals and spreads. Player props layer
 in opponent-allowed adjustments.
 
-Use the **Team Game Log & Trends** section to see historical O/U & cover rates for any team—
-overall and by day (Sun/Mon/Thu).
+Use **Team Log Adjustments** below to blend in this season's tendencies from the game log sheet.
 """)
 
 with st.expander("📱 Add This App to Your Home Screen (Recommended)", expanded=False):
@@ -619,10 +655,12 @@ with st.expander("1) Game Selection + Prediction", expanded=(selected_section ==
         st.warning("No game found for that team/week.")
     else:
         g = game_row.iloc[0]
-        opponent = g["away_team"] if g["home_team"] == selected_team else g["home_team"]
+        home_team = g["home_team"]
+        away_team = g["away_team"]
+        opponent = away_team if home_team == selected_team else home_team
 
         with cols[2]:
-            st.markdown(f"**Matchup:** {selected_team} vs {opponent}")
+            st.markdown(f"**Matchup:** {away_team} @ {home_team}")
 
         default_ou = float(g["over_under"]) if pd.notna(g.get("over_under", np.nan)) else 45.0
         default_home_spread = float(g["home_spread"]) if pd.notna(g.get("home_spread", np.nan)) else 0.0
@@ -633,23 +671,51 @@ with st.expander("1) Game Selection + Prediction", expanded=(selected_section ==
         with cR:
             home_spread_val = st.number_input("Home-based Spread (home team perspective)", value=default_home_spread, step=0.5, key="sec1_spread")
 
-        st.subheader("Game Prediction (Vegas-Calibrated)")
-        team_pts, opp_pts = predict_scores(scores_df, selected_team, opponent)
-        total_pred = team_pts + opp_pts
-        margin = team_pts - opp_pts
-        total_diff = total_pred - over_under
-        spread_diff = margin - (-home_spread_val)
+        # --- Base model ---
+        base_home_pts, base_away_pts = predict_scores(scores_df, home_team, away_team)
+        base_total = base_home_pts + base_away_pts
+        base_margin = base_home_pts - base_away_pts
+
+        # --- Optional Team Log Adjustments ---
+        st.markdown("### Team Log Adjustments")
+        use_adj = st.checkbox("Blend in this season's O/U & Cover tendencies from the Team Game Log", value=True)
+        last_n_for_adj = st.number_input("Use last N games for adjustments (0 = all)", min_value=0, value=0, step=1)
+        ou_weight = st.slider("O/U tendency weight (± points to total at extremes)", 0.0, 8.0, 4.0, 0.5)
+        spread_weight = st.slider("Cover tendency weight (± points to margin at extremes)", 0.0, 6.0, 3.0, 0.5)
+
+        adj_total = base_total
+        adj_margin = base_margin
+        if use_adj and team_log_df is not None and not team_log_df.empty:
+            home_key = team_key(home_team)
+            away_key = team_key(away_team)
+            total_bump = ou_adjustment_from_rates(team_log_df, home_key, away_key, ou_weight, last_n_for_adj)
+            margin_bump = spread_adjustment_from_rates(team_log_df, home_key, away_key, spread_weight, last_n_for_adj)
+            adj_total = base_total + total_bump
+            adj_margin = base_margin + margin_bump
+
+        # Convert adjusted total/margin back to team scores
+        adj_home_pts = max(0.0, (adj_total + adj_margin) / 2.0)
+        adj_away_pts = max(0.0, (adj_total - adj_margin) / 2.0)
+
+        st.subheader("Predictions")
+        mrow0 = st.columns(2)
+        mrow0[0].metric("Base Predicted Total", f"{base_total:.1f}")
+        mrow0[1].metric("Base Predicted Margin (Home - Away)", f"{base_margin:+.1f}")
 
         mrow1 = st.columns(2)
-        mrow1[0].metric(f"{selected_team} Predicted", f"{team_pts:.1f} pts")
-        mrow1[1].metric(f"{opponent} Predicted", f"{opp_pts:.1f} pts")
-        mrow2 = st.columns(2)
-        mrow2[0].metric("Predicted Total", f"{total_pred:.1f}", f"{total_diff:+.1f} vs O/U")
-        mrow2[1].metric("Predicted Margin", f"{margin:+.1f}", f"{spread_diff:+.1f} vs Home Spread")
+        mrow1[0].metric(f"{home_team} Predicted (Adjusted)", f"{adj_home_pts:.1f} pts")
+        mrow1[1].metric(f"{away_team} Predicted (Adjusted)", f"{adj_away_pts:.1f} pts")
 
-        fig_total = px.bar(x=["Predicted Total", "Vegas O/U"], y=[total_pred, over_under], title="Predicted Total vs O/U")
+        adj_total_diff = adj_total - over_under
+        adj_spread_diff = adj_margin - (-home_spread_val)
+
+        mrow2 = st.columns(2)
+        mrow2[0].metric("Adjusted Predicted Total", f"{adj_total:.1f}", f"{adj_total_diff:+.1f} vs O/U")
+        mrow2[1].metric("Adjusted Predicted Margin", f"{adj_margin:+.1f}", f"{adj_spread_diff:+.1f} vs Home Spread")
+
+        fig_total = px.bar(x=["Adjusted Total", "Vegas O/U"], y=[adj_total, over_under], title="Adjusted Total vs O/U")
         st.plotly_chart(fig_total, use_container_width=True)
-        fig_margin = px.bar(x=["Predicted Margin", "Home Spread Target"], y=[margin, -home_spread_val], title="Predicted Margin vs Home Spread")
+        fig_margin = px.bar(x=["Adjusted Margin", "Home Spread Target"], y=[adj_margin, -home_spread_val], title="Adjusted Margin vs Home Spread")
         st.plotly_chart(fig_margin, use_container_width=True)
 
 # -------------------------
@@ -1044,56 +1110,26 @@ with st.expander("5) Team Game Log & Trends (NEW)", expanded=(selected_section =
                                  barmode="group")
                     st.plotly_chart(fig, use_container_width=True)
 
-            # Recent games table
-            base_cols = []
+            # Recent games table (now including 'Result')
+            show_cols = []
             label_map = []
-            if "date" in sub.columns: base_cols.append("date"); label_map.append("Date")
-            if "day" in sub.columns: base_cols.append("day"); label_map.append("Day")
-            if "opponent" in sub.columns: base_cols.append("opponent"); label_map.append("Opponent")
-            if "is_away" in sub.columns: base_cols.append("is_away"); label_map.append("Away?")
-            if "ou_line" in sub.columns: base_cols.append("ou_line"); label_map.append("O/U Line")
-            if "ou_result" in sub.columns: base_cols.append("ou_result"); label_map.append("O/U Result")
-            if "spread" in sub.columns: base_cols.append("spread"); label_map.append("Spread")
-            if "cover_result" in sub.columns: base_cols.append("cover_result"); label_map.append("Cover Result")
-            if not base_cols:
+            if "date" in sub.columns: show_cols.append("date"); label_map.append("Date")
+            if "day" in sub.columns: show_cols.append("day"); label_map.append("Day")
+            if "opponent" in sub.columns: show_cols.append("opponent"); label_map.append("Opponent")
+            if "is_away" in sub.columns: show_cols.append("is_away"); label_map.append("Away?")
+            if "ou_line" in sub.columns: show_cols.append("ou_line"); label_map.append("O/U Line")
+            if "ou_result" in sub.columns: show_cols.append("ou_result"); label_map.append("O/U Result")
+            if "spread" in sub.columns: show_cols.append("spread"); label_map.append("Spread")
+            if "cover_result" in sub.columns: show_cols.append("cover_result"); label_map.append("Cover Result")
+            if "result" in sub.columns: show_cols.append("result"); label_map.append("Result")
+            if not show_cols:
                 st.info("Table columns not found in sheet. Check headers.")
             else:
                 st.subheader("Recent Games")
-                pretty = sub[base_cols].copy()
-                # New: derive human-friendly Score string from 'result' column if present
-                if "result" in sub.columns:
-                    pretty["score"] = sub["result"].apply(extract_score_from_result)
-                else:
-                    pretty["score"] = ""
-
-                # Render helpers
+                pretty = sub[show_cols].copy()
                 if "is_away" in pretty.columns:
                     pretty["is_away"] = pretty["is_away"].map({True:"@", False:"home"}).fillna("")
                 if "date" in pretty.columns:
                     pretty["date"] = pd.to_datetime(pretty["date"], errors="coerce").dt.strftime("%Y-%m-%d")
-
-                # Insert Score column right after Opponent if present
-                cols_order = list(pretty.columns)
-                if "opponent" in cols_order and "score" in cols_order:
-                    cols_order.remove("score")
-                    opp_idx = cols_order.index("opponent")
-                    cols_order.insert(opp_idx + 1, "score")
-                    pretty = pretty[cols_order]
-
-                # Rename for display
-                rename_map = dict(zip(pretty.columns, label_map + (["Score"] if "score" in pretty.columns else [])))
-                # If we inserted Score after Opponent, ensure the label_map aligns; rebuild safely:
-                final_labels = []
-                for c in pretty.columns:
-                    if c == "score":
-                        final_labels.append("Score")
-                    elif c in ["date","day","opponent","is_away","ou_line","ou_result","spread","cover_result"]:
-                        final_labels.append({
-                            "date":"Date","day":"Day","opponent":"Opponent","is_away":"Away?",
-                            "ou_line":"O/U Line","ou_result":"O/U Result","spread":"Spread","cover_result":"Cover Result"
-                        }[c])
-                    else:
-                        final_labels.append(c)
-                pretty.columns = final_labels
-
-                st.dataframe( pretty, use_container_width=True )
+                pretty.columns = label_map
+                st.dataframe(pretty, use_container_width=True)
