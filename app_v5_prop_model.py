@@ -602,7 +602,11 @@ We project team scoring using historical efficiency and calibrate to league scor
 then compare to Vegas lines to find edges on totals and spreads. Player props layer
 in opponent-allowed adjustments.
 
-Use **Team Log Adjustments** below to blend in this season's tendencies from the game log sheet.
+Use **Team Log Adjustments** to blend in this season's tendencies from the Team Game Log.
+
+**Tooltips you'll see below:**
+- **O/U tendency weight**: converts each team's share of *Over* results into a points bump (or drop) applied to the **total**. If a team has gone Over 70% (i.e., +20% vs a 50/50 baseline) and the slider is set to 4.0, that team's contribution is +0.8 points. Both teams' contributions are averaged.
+- **Cover tendency weight**: converts each team's cover rate into a points bump to the **margin** (home minus away). If the home team covers 60% (+10% vs 50%) and the weight is 3.0, the margin is nudged +0.3. The away team's bias subtracts from this.
 """)
 
 with st.expander("📱 Add This App to Your Home Screen (Recommended)", expanded=False):
@@ -647,9 +651,9 @@ with st.expander("1) Game Selection + Prediction", expanded=(selected_section ==
         )
         selected_team = st.selectbox("Team", teams_in_week, key="sec1_team")
 
-    game_row = scores_df[
-        ((scores_df["home_team"] == selected_team) | (scores_df["away_team"] == selected_team))
-        & (scores_df["week"] == selected_week)
+    game_row = scores_df[\
+        ((scores_df["home_team"] == selected_team) | (scores_df["away_team"] == selected_team))\
+        & (scores_df["week"] == selected_week)\
     ]
     if game_row.empty:
         st.warning("No game found for that team/week.")
@@ -678,10 +682,26 @@ with st.expander("1) Game Selection + Prediction", expanded=(selected_section ==
 
         # --- Optional Team Log Adjustments ---
         st.markdown("### Team Log Adjustments")
-        use_adj = st.checkbox("Blend in this season's O/U & Cover tendencies from the Team Game Log", value=True)
-        last_n_for_adj = st.number_input("Use last N games for adjustments (0 = all)", min_value=0, value=0, step=1)
-        ou_weight = st.slider("O/U tendency weight (± points to total at extremes)", 0.0, 8.0, 4.0, 0.5)
-        spread_weight = st.slider("Cover tendency weight (± points to margin at extremes)", 0.0, 6.0, 3.0, 0.5)
+        use_adj = st.checkbox(
+            "Blend in this season's O/U & Cover tendencies from the Team Game Log",
+            value=True,
+            help="Uses the Team Game Log sheet to calculate each team's historical O/U and spread-cover tendencies, then converts those into point adjustments for the total and margin."
+        )
+        last_n_for_adj = st.number_input(
+            "Use last N games for adjustments (0 = all)",
+            min_value=0, value=0, step=1,
+            help="Set to 0 to use the whole season; otherwise only the most recent N games are used for the tendencies."
+        )
+        ou_weight = st.slider(
+            "O/U tendency weight (± points to total at extremes)",
+            0.0, 8.0, 4.0, 0.5,
+            help="Translates a team's Over-vs-Under bias into a bump to the predicted total. Example: if a team has 70% Overs (+20% over 50/50) and this slider is 4.0, that team's contribution is +0.8 points. Home/away contributions are averaged."
+        )
+        spread_weight = st.slider(
+            "Cover tendency weight (± points to margin at extremes)",
+            0.0, 6.0, 3.0, 0.5,
+            help="Translates each team's cover rate into a bump to the predicted margin (home minus away). Example: if the home team covers 60% (+10% vs 50%) and weight=3.0, margin nudges +0.3. The away team's bias subtracts from this."
+        )
 
         adj_total = base_total
         adj_margin = base_margin
@@ -801,9 +821,9 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
     else:
         selected_team = st.session_state['sec1_team']
         selected_week = st.session_state['sec1_week']
-        game_row = scores_df[
-            ((scores_df["home_team"] == selected_team) | (scores_df["away_team"] == selected_team))
-            & (scores_df["week"] == selected_week)
+        game_row = scores_df[\
+            ((scores_df["home_team"] == selected_team) | (scores_df["away_team"] == selected_team))\
+            & (scores_df["week"] == selected_week)\
         ]
         if game_row.empty:
             st.warning("No game found for that team/week.")
