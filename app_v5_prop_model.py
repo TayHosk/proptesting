@@ -142,21 +142,29 @@ def consolidate_duplicate_columns(df, base_normalized):
     return out
 
 def parse_yes_no_push(val: str):
-    if pd.isna(val): return None
+    if pd.isna(val):
+        return None
     s = str(val).strip().lower()
-    if s in ["over","o","u","under","push","p","tie"]:
-        return s  # for OU we want over/under/push
-    # for spread cover
-    if any(x in s for x in ["cover","covered","yes","y"]):
+
+    # Explicit spread result formats in your sheet:
+    if s in ["covered", "yes", "y", "w", "win", "won"]:
         return "covered"
-    if any(x in s for x in ["no","not","didnt","didn't","failed"]):
+    if s in ["not covered", "no", "n", "l", "lose", "lost"]:
+        return "not_covered"
+    if s in ["push", "p", "tie", "tied"]:
+        return "push"
+
+    # Fallback logic:
+    if "cover" in s:
+        return "covered" if "not" not in s else "not_covered"
+    if "win" in s:
+        return "covered"
+    if "lose" in s or "lost" in s:
         return "not_covered"
     if "push" in s or "tie" in s:
         return "push"
-    # sometimes books use W/L/Push relative to spread
-    if s in ["w","win","won"]: return "covered"
-    if s in ["l","lose","lost"]: return "not_covered"
-    return s
+
+    return None
 
 # =========================
 # Loaders
