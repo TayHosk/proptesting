@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -158,6 +159,16 @@ def parse_cover_result(val: str):
         return "did not cover"
     return None
 
+def extract_score_from_result(val: str) -> str:
+    """From 'L, 20-24' or 'W, 27 - 21' -> '20-24'"""
+    if pd.isna(val):
+        return ""
+    s = str(val)
+    m = re.search(r'(\d+)\s*-\s*(\d+)', s)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}"
+    return ""
+
 # =========================
 # Loaders
 # =========================
@@ -251,6 +262,10 @@ def load_team_game_log(url: str) -> pd.DataFrame:
     idx = find_col(norm_cols, ["did_they_cover_the_spread"], contains_ok=True)
     if idx is not None: mapper["cover_result"] = df.columns[idx]
 
+    # Also grab Result (e.g., 'W, 27-21')
+    idx = find_col(norm_cols, ["result"], contains_ok=True)
+    if idx is not None: mapper["result"] = df.columns[idx]
+
     out = pd.DataFrame()
     for k, col in mapper.items():
         out[k] = df[col]
@@ -282,6 +297,10 @@ def load_team_game_log(url: str) -> pd.DataFrame:
     if "cover_result" in out.columns:
         out["cover_result_norm"] = out["cover_result"].apply(parse_cover_result)
 
+    # Extract a clean score string like '20-24' from the 'result' column if present
+    if "result" in out.columns:
+        out["score"] = out["result"].apply(extract_score_from_result)
+
     return out
 
 # =========================
@@ -305,7 +324,7 @@ def predict_scores(df: pd.DataFrame, team_label: str, opponent_label: str):
     opp_pts = float(raw_opp_pts * cal_factor) if pd.notna(raw_opp_pts) else 22.3
     return team_pts, opp_pts
 
-# ===== Player prop helpers (kept same structure) =====
+# ===== Player prop helpers =====
 def find_player_in(df: pd.DataFrame, player_name: str):
     if "player" not in df.columns:
         return None
@@ -1026,24 +1045,55 @@ with st.expander("5) Team Game Log & Trends (NEW)", expanded=(selected_section =
                     st.plotly_chart(fig, use_container_width=True)
 
             # Recent games table
-            show_cols = []
+            base_cols = []
             label_map = []
-            if "date" in sub.columns: show_cols.append("date"); label_map.append("Date")
-            if "day" in sub.columns: show_cols.append("day"); label_map.append("Day")
-            if "opponent" in sub.columns: show_cols.append("opponent"); label_map.append("Opponent")
-            if "is_away" in sub.columns: show_cols.append("is_away"); label_map.append("Away?")
-            if "ou_line" in sub.columns: show_cols.append("ou_line"); label_map.append("O/U Line")
-            if "ou_result" in sub.columns: show_cols.append("ou_result"); label_map.append("O/U Result")
-            if "spread" in sub.columns: show_cols.append("spread"); label_map.append("Spread")
-            if "cover_result" in sub.columns: show_cols.append("cover_result"); label_map.append("Cover Result")
-            if not show_cols:
+            if "date" in sub.columns: base_cols.append("date"); label_map.append("Date")
+            if "day" in sub.columns: base_cols.append("day"); label_map.append("Day")
+            if "opponent" in sub.columns: base_cols.append("opponent"); label_map.append("Opponent")
+            if "is_away" in sub.columns: base_cols.append("is_away"); label_map.append("Away?")
+            if "ou_line" in sub.columns: base_cols.append("ou_line"); label_map.append("O/U Line")
+            if "ou_result" in sub.columns: base_cols.append("ou_result"); label_map.append("O/U Result")
+            if "spread" in sub.columns: base_cols.append("spread"); label_map.append("Spread")
+            if "cover_result" in sub.columns: base_cols.append("cover_result"); label_map.append("Cover Result")
+            if not base_cols:
                 st.info("Table columns not found in sheet. Check headers.")
             else:
                 st.subheader("Recent Games")
-                pretty = sub[show_cols].copy()
+                pretty = sub[base_cols].copy()
+                # New: derive human-friendly Score string from 'result' column if present
+                if "result" in sub.columns:
+                    pretty["score"] = sub["result"].apply(extract_score_from_result)
+                else:
+                    pretty["score"] = ""
+
+                # Render helpers
                 if "is_away" in pretty.columns:
                     pretty["is_away"] = pretty["is_away"].map({True:"@", False:"home"}).fillna("")
                 if "date" in pretty.columns:
                     pretty["date"] = pd.to_datetime(pretty["date"], errors="coerce").dt.strftime("%Y-%m-%d")
-                pretty.columns = label_map
-                st.dataframe(pretty, use_container_width=True)
+
+                # Insert Score column right after Opponent if present
+                cols_order = list(pretty.columns)
+                if "opponent" in cols_order and "score" in cols_order:
+                    cols_order.remove("score")
+                    opp_idx = cols_order.index("opponent")
+                    cols_order.insert(opp_idx + 1, "score")
+                    pretty = pretty[cols_order]
+
+                # Rename for display
+                rename_map = dict(zip(pretty.columns, label_map + (["Score"] if "score" in pretty.columns else [])))
+                # If we inserted Score after Opponent, ensure the label_map aligns; rebuild safely:
+                final_labels = []
+                for c in pretty.columns:
+                    if c == "score":
+                        final_labels.append("Score")
+                    elif c in ["date","day","opponent","is_away","ou_line","ou_result","spread","cover_result"]:
+                        final_labels.append({
+                            "date":"Date","day":"Day","opponent":"Opponent","is_away":"Away?",
+                            "ou_line":"O/U Line","ou_result":"O/U Result","spread":"Spread","cover_result":"Cover Result"
+                        }[c])
+                    else:
+                        final_labels.append(c)
+                pretty.columns = final_labels
+
+                st.dataframe( pretty, use_container_width=True )
