@@ -4,18 +4,13 @@ import numpy as np
 from scipy.stats import norm
 import plotly.express as px
 import re
-from datetime import datetime
 
 st.set_page_config(page_title="NFL Betting Model", layout="wide")
 
 # =========================
 # Data Sources (Google Sheets)
 # =========================
-# Games & lines sheet you already use
 SCORE_URL = "https://docs.google.com/spreadsheets/d/1KrTQbR5uqlBn2v2Onpjo6qHFnLlrqIQBzE52KAhMYcY/export?format=csv"
-
-# NEW: Team game log sheet (abbreviations; one row per team per game)
-# (Converted to CSV export form using your doc id)
 TEAM_GAME_LOG_URL = "https://docs.google.com/spreadsheets/d/1PmVC_rWKdHNISbZHe0uQmv65d3fJx6vBtA2ydHl1qQA/export?format=csv"
 
 SHEETS = {
@@ -33,7 +28,7 @@ SHEETS = {
 }
 
 # =========================
-# Team alias map (full names + nicknames + abbreviations)
+# Team alias map
 # =========================
 TEAM_ALIAS_TO_CODE = {
     "arizona cardinals": "ARI", "cardinals": "ARI", "arizona": "ARI", "ari": "ARI",
@@ -86,7 +81,8 @@ CODE_TO_FULLNAME = {
 FULLNAME_TO_CODE = {v: k for k, v in CODE_TO_FULLNAME.items()}
 
 def team_key(name: str) -> str:
-    if pd.isna(name): return ""
+    if pd.isna(name):
+        return ""
     s = str(name).strip().lower()
     return TEAM_ALIAS_TO_CODE.get(s, s)
 
@@ -103,18 +99,13 @@ with st.sidebar:
 # Helpers
 # =========================
 def normalize_header(name: str) -> str:
-    name = str(name) if not isinstance(name, str) else name
+    if not isinstance(name, str):
+        name = str(name)
     name = name.strip().replace(" ", "_").lower()
     name = re.sub(r"[^0-9a-z_]", "", name)
     return name
 
 def find_col(cols_norm, prefer_any_of, contains_ok=False):
-    """
-    cols_norm: list of normalized column names
-    prefer_any_of: list of normalized candidate names or substrings
-    contains_ok: if True, match by substring if exact not found
-    returns index or None
-    """
     for cand in prefer_any_of:
         if cand in cols_norm:
             return cols_norm.index(cand)
@@ -125,10 +116,6 @@ def find_col(cols_norm, prefer_any_of, contains_ok=False):
     return None
 
 def consolidate_duplicate_columns(df, base_normalized):
-    """
-    If df has duplicate columns like over_under_result, over_under_result_1, etc.,
-    create a single column with the first non-null value and drop the extras.
-    """
     cols = [c for c in df.columns if c == base_normalized or c.startswith(base_normalized + "_")]
     if len(cols) <= 1:
         return df
@@ -136,45 +123,45 @@ def consolidate_duplicate_columns(df, base_normalized):
     out[base_normalized + "_final"] = pd.NA
     for c in cols:
         out[base_normalized + "_final"] = out[base_normalized + "_final"].fillna(out[c])
-    # keep a single clean name
     out.drop(columns=cols, inplace=True)
     out.rename(columns={base_normalized + "_final": base_normalized}, inplace=True)
     return out
 
-def parse_yes_no_push(val: str):
+# ----- Parsers (tailored to your exact labels) -----
+def parse_ou_result(val: str):
+    """Normalize to exactly 'over' or 'under' (no push use-case)."""
     if pd.isna(val):
         return None
     s = str(val).strip().lower()
+    if "over" in s:
+        return "over"
+    if "under" in s:
+        return "under"
+    return None
 
-    # Explicit spread result formats in your sheet:
-    if s in ["covered", "yes", "y", "w", "win", "won"]:
+def parse_cover_result(val: str):
+    """Normalize to exactly 'covered' or 'did not cover' (no push)."""
+    if pd.isna(val):
+        return None
+    s = str(val).strip().lower()
+    # direct match first
+    if s in ["covered", "cover", "yes", "y", "w", "win", "won"]:
         return "covered"
-    if s in ["not covered", "no", "n", "l", "lose", "lost"]:
-        return "not_covered"
-    if s in ["push", "p", "tie", "tied"]:
-        return "push"
-
-    # Fallback logic:
+    if s in ["did not cover", "didnt cover", "didn't cover", "no", "n", "l", "lose", "lost"]:
+        return "did not cover"
+    # fuzzy
     if "cover" in s:
-        return "covered" if "not" not in s else "not_covered"
+        return "did not cover" if ("not" in s or "did not" in s or "didn't" in s) else "covered"
     if "win" in s:
         return "covered"
     if "lose" in s or "lost" in s:
-        return "not_covered"
-    if "push" in s or "tie" in s:
-        return "push"
-
+        return "did not cover"
     return None
 
 # =========================
 # Loaders
 # =========================
 def compute_home_spread(row: pd.Series) -> float:
-    """
-    Convert (favored_team, spread) into HOME-based spread.
-      - If home is the favorite  → negative abs(spread)
-      - If away is the favorite  → positive abs(spread)
-    """
     try:
         home = row.get("home_team", None)
         fav = row.get("favored_team", None)
@@ -230,22 +217,18 @@ def load_team_game_log(url: str) -> pd.DataFrame:
     df = raw.copy()
     df.columns = norm_cols
 
-    # Consolidate the duplicate "Over Under Result"
+    # Consolidate duplicate OU result headers if any
     df = consolidate_duplicate_columns(df, "over_under_result")
 
-    # Build canonical columns if present
-    # team, date, day, week, opponent, is_away (column with '@' when away), ou_line, ou_result, spread, cover_result
+    # Map canonical columns
     mapper = {}
 
     idx = find_col(norm_cols, ["team"])
     if idx is not None: mapper["team"] = df.columns[idx]
-
     idx = find_col(norm_cols, ["date"])
     if idx is not None: mapper["date"] = df.columns[idx]
-
     idx = find_col(norm_cols, ["day"])
     if idx is not None: mapper["day"] = df.columns[idx]
-
     idx = find_col(norm_cols, ["week"])
     if idx is not None: mapper["week"] = df.columns[idx]
 
@@ -255,17 +238,16 @@ def load_team_game_log(url: str) -> pd.DataFrame:
 
     idx = find_col(norm_cols, ["opponent"])
     if idx is not None: mapper["opponent"] = df.columns[idx]
-
     idx = find_col(norm_cols, ["over_under_line"])
     if idx is not None: mapper["ou_line"] = df.columns[idx]
 
-    # we renamed duplicates to a single "over_under_result" above
     if "over_under_result" in df.columns:
         mapper["ou_result"] = "over_under_result"
 
     idx = find_col(norm_cols, ["spread"])
     if idx is not None: mapper["spread"] = df.columns[idx]
 
+    # Exact header per your note: "Did they cover the spread"
     idx = find_col(norm_cols, ["did_they_cover_the_spread"], contains_ok=True)
     if idx is not None: mapper["cover_result"] = df.columns[idx]
 
@@ -294,16 +276,16 @@ def load_team_game_log(url: str) -> pd.DataFrame:
     if "opponent" in out.columns:
         out["opponent_key"] = out["opponent"].apply(team_key)
 
-    # Parse OU + cover result to consistent labels
+    # Parse OU + cover results into exact labels you want
     if "ou_result" in out.columns:
-        out["ou_result_norm"] = out["ou_result"].apply(parse_yes_no_push)
+        out["ou_result_norm"] = out["ou_result"].apply(parse_ou_result)
     if "cover_result" in out.columns:
-        out["cover_result_norm"] = out["cover_result"].apply(parse_yes_no_push)
+        out["cover_result_norm"] = out["cover_result"].apply(parse_cover_result)
 
     return out
 
 # =========================
-# Model logic (existing)
+# Model logic
 # =========================
 def avg_scoring(df: pd.DataFrame, team_label: str):
     scored_home = df.loc[df["home_team"] == team_label, "home_score"].mean()
@@ -323,9 +305,10 @@ def predict_scores(df: pd.DataFrame, team_label: str, opponent_label: str):
     opp_pts = float(raw_opp_pts * cal_factor) if pd.notna(raw_opp_pts) else 22.3
     return team_pts, opp_pts
 
-# ===== Prop helpers (existing) =====
+# ===== Player prop helpers (kept same structure) =====
 def find_player_in(df: pd.DataFrame, player_name: str):
-    if "player" not in df.columns: return None
+    if "player" not in df.columns:
+        return None
     mask = df["player"].astype(str).str.lower() == str(player_name).lower()
     return df[mask].copy() if mask.any() else None
 
@@ -341,18 +324,23 @@ def detect_stat_col(df: pd.DataFrame, prop: str):
     }
     pri = mapping.get(prop, [])
     for cand in pri:
-        if cand in norm: return cols[norm.index(cand)]
+        if cand in norm:
+            return cols[norm.index(cand)]
     for i, c in enumerate(norm):
         if prop.split("_")[0] in c and ("per_game" in c or "total" in c):
             return cols[i]
     return None
 
 def pick_def_df(prop: str, pos: str, d_qb, d_rb, d_wr, d_te):
-    if prop == "passing_yards": return d_qb
-    if prop in ["rushing_yards","carries"]: return d_rb if pos != "qb" else d_qb
+    if prop == "passing_yards":
+        return d_qb
+    if prop in ["rushing_yards","carries"]:
+        return d_rb if pos != "qb" else d_qb
     if prop in ["receiving_yards","receptions","targets"]:
-        if pos == "te": return d_te
-        if pos == "rb": return d_rb
+        if pos == "te":
+            return d_te
+        if pos == "rb":
+            return d_rb
         return d_wr
     return None
 
@@ -366,9 +354,11 @@ def detect_def_col(def_df: pd.DataFrame, prop: str):
     elif prop == "passing_yards":
         prefs = ["passing_yards_allowed_total","passing_yards_allowed"]
     for cand in prefs:
-        if cand in norm: return cols[norm.index(cand)]
+        if cand in norm:
+            return cols[norm.index(cand)]
     for i, nc in enumerate(norm):
-        if "allowed" in nc: return cols[i]
+        if "allowed" in nc:
+            return cols[i]
     return None
 
 def prop_prediction_and_probs(
@@ -387,9 +377,12 @@ def prop_prediction_and_probs(
     opponent_key_override: str = None
 ):
     def pick_player_df(prop):
-        if prop in ["receiving_yards","receptions","targets"]: return p_rec, "wr"
-        if prop in ["rushing_yards","carries"]: return p_rush, "rb"
-        if prop == "passing_yards": return p_pass, "qb"
+        if prop in ["receiving_yards","receptions","targets"]:
+            return p_rec, "wr"
+        if prop in ["rushing_yards","carries"]:
+            return p_rush, "rb"
+        if prop == "passing_yards":
+            return p_pass, "qb"
         return p_rec, "wr"
 
     if selected_prop == "anytime_td":
@@ -408,21 +401,26 @@ def prop_prediction_and_probs(
             return {"error": "No touchdown data found for this player."}
         def_dfs = [d_rb.copy(), d_wr.copy(), d_te.copy()]
         for d in def_dfs:
-            if "games_played" not in d.columns: d["games_played"] = 1
+            if "games_played" not in d.columns:
+                d["games_played"] = 1
             td_cols = [c for c in d.columns if "td" in c and "allowed" in c]
             if len(td_cols) == 0:
                 d["tds_pg"] = np.nan
             else:
                 d["tds_pg"] = d[td_cols].sum(axis=1) / d["games_played"].replace(0, np.nan)
-            if "team_key" not in d.columns: d["team_key"] = d["team"].apply(team_key)
+            if "team_key" not in d.columns:
+                d["team_key"] = d["team"].apply(team_key)
         league_td_pg = np.nanmean([d["tds_pg"].mean() for d in def_dfs if "tds_pg" in d.columns])
         player_team_key = None
         for df_ in [p_rec, p_rush, p_pass]:
             row_ = find_player_in(df_, player_name)
             if row_ is not None and not row_.empty:
                 tk = row_.iloc[0].get("team_key", "")
-                if tk: player_team_key = tk; break
-        if not player_team_key: player_team_key = selected_team_key
+                if tk:
+                    player_team_key = tk
+                    break
+        if not player_team_key:
+            player_team_key = selected_team_key
         opp_key_for_player = opponent_key_override if opponent_key_override else (opponent_key if player_team_key == selected_team_key else selected_team_key)
         opp_td_list = []
         for d in def_dfs:
@@ -493,15 +491,19 @@ def prop_prediction_and_probs(
         "games_played": games_played
     }
 
-# Odds + market helpers (existing)
+# Odds + market helpers
 def american_to_decimal(odds: float) -> float:
-    try: o = float(odds)
-    except Exception: return np.nan
+    try:
+        o = float(odds)
+    except Exception:
+        return np.nan
     return 1 + (o / 100.0) if o > 0 else 1 + (100.0 / abs(o))
 
 def decimal_to_american(dec: float) -> float:
-    if dec <= 1: return np.nan
-    if dec >= 2: return round((dec - 1) * 100)
+    if dec <= 1:
+        return np.nan
+    if dec >= 2:
+        return round((dec - 1) * 100)
     return round(-100 / (dec - 1))
 
 def prob_to_decimal(p: float) -> float:
@@ -643,16 +645,21 @@ with st.expander("2) Top Edges This Week", expanded=(selected_section == section
         wk["home_spread"] = wk.apply(compute_home_spread, axis=1)
 
     def strength_badge(edge_val):
-        if pd.isna(edge_val): return "⬜"
+        if pd.isna(edge_val):
+            return "⬜"
         a = abs(edge_val)
-        if a >= 4: return "🟩"
-        elif a >= 2: return "🟨"
-        else: return "🟥"
+        if a >= 4:
+            return "🟩"
+        elif a >= 2:
+            return "🟨"
+        else:
+            return "🟥"
 
     rows = []
     for _, r in wk.iterrows():
         h, a = r.get("home_team"), r.get("away_team")
-        if pd.isna(h) or pd.isna(a): continue
+        if pd.isna(h) or pd.isna(a):
+            continue
         h_pts, a_pts = predict_scores(scores_df, h, a)
         tot_pred = h_pts + a_pts
         mar_pred = h_pts - a_pts
@@ -861,7 +868,8 @@ with st.expander("4) Parlay Builder (Players + Game Markets)", expanded=(selecte
         matchups, meta, home_spreads_for_match, ous_for_match = [], [], [], []
         for _, row in wk_df.iterrows():
             h = row.get("home_team"); a = row.get("away_team")
-            if pd.isna(h) or pd.isna(a): continue
+            if pd.isna(h) or pd.isna(a):
+                continue
             matchups.append(f"{a} @ {h}")
             meta.append((h, a))
             home_spreads_for_match.append(float(row.get("home_spread")) if pd.notna(row.get("home_spread", np.nan)) else 0.0)
@@ -957,7 +965,6 @@ with st.expander("5) Team Game Log & Trends (NEW)", expanded=(selected_section =
     if team_log_df is None or team_log_df.empty:
         st.info("No team game log data found.")
     else:
-        # Team selector (abbreviations)
         teams = sorted([t for t in team_log_df["team"].dropna().unique()] if "team" in team_log_df.columns else [])
         if not teams:
             st.info("Team column not present in sheet. Check your sharing/export.")
@@ -973,42 +980,41 @@ with st.expander("5) Team Game Log & Trends (NEW)", expanded=(selected_section =
             sub = team_log_df.copy()
             sub = sub[sub["team"] == pick_team]
 
-            # Day filter (your sheet uses full day names like Sunday/Monday/Thursday)
+            # Day filter
             if day_filter != "All" and "day" in sub.columns:
                 sub = sub[sub["day"].astype(str).str.lower() == day_filter.lower()]
 
-            # Sort by date then limit to last N
             if "date" in sub.columns:
                 sub = sub.sort_values("date")
             if last_n and last_n > 0:
                 sub = sub.tail(last_n)
 
-            # Metrics
+            # ----- Metrics with your exact labels -----
             ou_over = ou_under = ou_total = 0
             if "ou_result_norm" in sub.columns:
                 vals = sub["ou_result_norm"].dropna().astype(str).str.lower()
                 ou_over = (vals == "over").sum()
                 ou_under = (vals == "under").sum()
-                ou_total = (vals.isin(["over","under"])).sum()  # exclude pushes
+                ou_total = (vals.isin(["over","under"])).sum()  # no pushes by design
             cover_yes = cover_no = cover_total = 0
             if "cover_result_norm" in sub.columns:
                 cvals = sub["cover_result_norm"].dropna().astype(str).str.lower()
                 cover_yes = (cvals == "covered").sum()
-                cover_no = (cvals == "not_covered").sum()
-                cover_total = (cvals.isin(["covered","not_covered"])).sum()
+                cover_no = (cvals == "did not cover").sum()
+                cover_total = (cvals.isin(["covered","did not cover"])).sum()
 
             m1, m2, m3 = st.columns(3)
             with m1:
                 pct_over = (ou_over / ou_total * 100.0) if ou_total else 0.0
-                st.metric("O/U Over Hit %", f"{pct_over:.1f}%", f"{ou_over}/{ou_total} (excl. pushes)")
+                st.metric("O/U Over Hit %", f"{pct_over:.1f}%", f"{ou_over}/{ou_total}")
             with m2:
                 pct_under = (ou_under / ou_total * 100.0) if ou_total else 0.0
-                st.metric("O/U Under Hit %", f"{pct_under:.1f}%", f"{ou_under}/{ou_total} (excl. pushes)")
+                st.metric("O/U Under Hit %", f"{pct_under:.1f}%", f"{ou_under}/{ou_total}")
             with m3:
                 pct_cover = (cover_yes / cover_total * 100.0) if cover_total else 0.0
-                st.metric("Spread Cover %", f"{pct_cover:.1f}%", f"{cover_yes}/{cover_total} (excl. pushes)")
+                st.metric("Spread Cover %", f"{pct_cover:.1f}%", f"{cover_yes}/{cover_total} covered")
 
-            # By-day breakdown chart
+            # By-day breakdown chart (using 'over'/'under' only)
             if "day" in team_log_df.columns and "ou_result_norm" in team_log_df.columns:
                 day_data = team_log_df[team_log_df["team"] == pick_team].copy()
                 day_data = day_data[day_data["ou_result_norm"].isin(["over","under"])]
@@ -1022,7 +1028,6 @@ with st.expander("5) Team Game Log & Trends (NEW)", expanded=(selected_section =
             # Recent games table
             show_cols = []
             label_map = []
-            # build nice column selections if present
             if "date" in sub.columns: show_cols.append("date"); label_map.append("Date")
             if "day" in sub.columns: show_cols.append("day"); label_map.append("Day")
             if "opponent" in sub.columns: show_cols.append("opponent"); label_map.append("Opponent")
@@ -1036,11 +1041,9 @@ with st.expander("5) Team Game Log & Trends (NEW)", expanded=(selected_section =
             else:
                 st.subheader("Recent Games")
                 pretty = sub[show_cols].copy()
-                # format columns
                 if "is_away" in pretty.columns:
                     pretty["is_away"] = pretty["is_away"].map({True:"@", False:"home"}).fillna("")
                 if "date" in pretty.columns:
                     pretty["date"] = pd.to_datetime(pretty["date"], errors="coerce").dt.strftime("%Y-%m-%d")
-                # rename headers
                 pretty.columns = label_map
                 st.dataframe(pretty, use_container_width=True)
