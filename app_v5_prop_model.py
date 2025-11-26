@@ -19,7 +19,7 @@ WR_STATS_URL = "https://docs.google.com/spreadsheets/d/1Gwb2A-a4ge7UKHnC7wUpJltg
 RB_STATS_URL = "https://docs.google.com/spreadsheets/d/11vYTC2o-WOOyN_oVuqq-hArgwdsPfvQWJWqiISK0bUg/export?format=csv"
 TE_STATS_URL = "https://docs.google.com/spreadsheets/d/1tAFG33Mh2WlDWAAobEJFbFS6A_7mdp0RjHanolrqTgs/export?format=csv"
 
-# NEW: Player game logs (every game this year)
+# Player game logs (every game this year)
 PLAYER_GAME_LOG_URL = "https://docs.google.com/spreadsheets/d/1iJNtTJcC3zv0Qvb7LxynF1tTPlggN8hOpQP-ROnPda8/export?format=csv"
 
 # How many recent games to use for trend vs season
@@ -338,7 +338,6 @@ def load_team_game_log(url: str) -> pd.DataFrame:
     if idx is not None: mapper["result"] = df.columns[idx]
 
     # Defensive columns we'll use for props:
-    # passing_yards_gained_by_opposition, rushing_yards_by_opposition, rushing_attempts_by_opposition
     for c in ["passing_yards_gained_by_opposition", "rushing_yards_by_opposition", "rushing_attempts_by_opposition"]:
         if c in df.columns:
             mapper[c] = c
@@ -467,6 +466,9 @@ def get_games_played(row: pd.Series) -> float:
     return 1.0
 
 def prop_stat_candidates(selected_prop: str):
+    """
+    Column candidates for BOTH season sheets and game-log sheet.
+    """
     if selected_prop == "passing_yards":
         return ["yards_gained_by_passing", "passing_yards_gained"]
     elif selected_prop == "rushing_yards":
@@ -474,9 +476,11 @@ def prop_stat_candidates(selected_prop: str):
     elif selected_prop == "receiving_yards":
         return ["receiving_yards"]
     elif selected_prop == "receptions":
-        return ["receptions"]
+        # Season sheet: 'receptions'; game log: 'pass_receptions'
+        return ["receptions", "pass_receptions"]
     elif selected_prop == "targets":
-        return ["pass_targets"]
+        # Season: 'pass_targets'; in case of typo, also 'pass_targetes'
+        return ["pass_targets", "pass_targetes"]
     elif selected_prop == "carries":
         return ["rushing_attempts"]
     return []
@@ -491,6 +495,9 @@ def get_stat_value_for_prop(row: pd.Series, selected_prop: str):
     return None
 
 def player_recent_avg(player_game_log_df: pd.DataFrame, player_name: str, selected_prop: str, last_n: int):
+    """
+    Average stat over last N games from the game-log sheet.
+    """
     if player_game_log_df is None or player_game_log_df.empty:
         return None
     name = str(player_name).strip().lower()
