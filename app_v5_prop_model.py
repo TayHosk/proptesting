@@ -40,11 +40,8 @@ TEAM_ALIAS_TO_CODE = {
     "jacksonville jaguars": "JAX", "jaguars": "JAX", "jacksonville": "JAX", "jax": "JAX", "jacs": "JAX",
     "kansas city chiefs": "KC", "chiefs": "KC", "kansas city": "KC", "kc": "KC",
     "las vegas raiders": "LV", "raiders": "LV", "las vegas": "LV", "lv": "LV",
-    "oakland raiders": "LV", "oakland": "LV",
     "los angeles chargers": "LAC", "la chargers": "LAC", "chargers": "LAC", "lac": "LAC",
-    "san diego chargers": "LAC", "san diego": "LAC",
     "los angeles rams": "LAR", "la rams": "LAR", "rams": "LAR", "lar": "LAR",
-    "st. louis rams": "LAR", "st louis rams": "LAR", "st louis": "LAR",
     "miami dolphins": "MIA", "dolphins": "MIA", "miami": "MIA", "mia": "MIA",
     "minnesota vikings": "MIN", "vikings": "MIN", "minnesota": "MIN", "min": "MIN",
     "new england patriots": "NE", "patriots": "NE", "new england": "NE", "ne": "NE",
@@ -58,7 +55,17 @@ TEAM_ALIAS_TO_CODE = {
     "tampa bay buccaneers": "TB", "buccaneers": "TB", "bucs": "TB", "tampa bay": "TB", "tb": "TB",
     "tennessee titans": "TEN", "titans": "TEN", "tennessee": "TEN", "ten": "TEN",
     "washington commanders": "WAS", "commanders": "WAS", "washington": "WAS", "was": "WAS", "wsh": "WAS",
-    "washington football team": "WAS", "redskins": "WAS"
+    "washington football team": "WAS", "redskins": "WAS",
+
+    # PFR-style 3-letter team codes from your stat sheets
+    "nwe": "NE",
+    "gnb": "GB",
+    "kan": "KC",
+    "tam": "TB",
+    "nor": "NO",
+    "sfo": "SF",
+    "lvr": "LV",
+    "ram": "LAR",
 }
 CODE_TO_FULLNAME = {
     "ARI": "Arizona Cardinals","ATL": "Atlanta Falcons","BAL": "Baltimore Ravens","BUF": "Buffalo Bills",
@@ -73,10 +80,41 @@ CODE_TO_FULLNAME = {
 FULLNAME_TO_CODE = {v: k for k, v in CODE_TO_FULLNAME.items()}
 
 def team_key(name: str) -> str:
+    """
+    Normalize anything that looks like a team label (full name, standard abbr, PFR abbr, messy text)
+    into a clean code like 'GB', 'NE', 'KC', etc.
+    """
     if pd.isna(name):
         return ""
-    s = str(name).strip().lower()
-    return TEAM_ALIAS_TO_CODE.get(s, s)
+
+    s_raw = str(name).strip()
+    s_lower = s_raw.lower()
+
+    # 1) Direct lookup
+    if s_lower in TEAM_ALIAS_TO_CODE:
+        return TEAM_ALIAS_TO_CODE[s_lower]
+
+    # 2) Strip non-letters (handles things like 'GNB ' or 'GNB*' or 'sfo\n')
+    s_clean = re.sub(r"[^a-z]", "", s_lower)
+    if s_clean in TEAM_ALIAS_TO_CODE:
+        return TEAM_ALIAS_TO_CODE[s_clean]
+
+    # 3) Handle comma-separated garbage like "cin,cle" → take the first chunk
+    if "," in s_lower:
+        first = s_lower.split(",")[0].strip()
+        if first in TEAM_ALIAS_TO_CODE:
+            return TEAM_ALIAS_TO_CODE[first]
+        first_clean = re.sub(r"[^a-z]", "", first)
+        if first_clean in TEAM_ALIAS_TO_CODE:
+            return TEAM_ALIAS_TO_CODE[first_clean]
+
+    # 4) As a last resort, return an uppercased 2–3 letter code if that exists in CODE_TO_FULLNAME
+    cand = s_clean.upper()
+    if cand in CODE_TO_FULLNAME:
+        return cand
+
+    # If nothing hits, return the cleaned upper value (won't match anything but at least stable)
+    return cand
 
 # =========================
 # Sidebar: Cache refresh
@@ -340,7 +378,8 @@ def team_log_summary(team_log_df: pd.DataFrame, team_abbr: str, last_n:int=0):
     if team_log_df is None or team_log_df.empty:
         return {"ou_over":0,"ou_under":0,"cover_yes":0,"cover_no":0,"games":0}
     sub = team_log_df.copy()
-    sub = sub[sub.get("team","") == team_abbr]
+    # use normalized key, not raw PFR code
+    sub = sub[sub.get("team_key","") == team_abbr]
     if "date" in sub.columns:
         sub = sub.sort_values("date")
     if last_n and last_n > 0:
@@ -794,12 +833,56 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
             g = game_row.iloc[0]
             opponent = g["away_team"] if g["home_team"] == selected_team else g["home_team"]
 
-            def players_for_team(df, team_name_or_label):
-                key = team_key(team_name_or_label)
-                if "team_key" not in df.columns or "player" not in df.columns:
+            def players_for_team(df: pd.DataFrame, team_name_or_label: str):
+                """
+                Return all players for a given team, being extra forgiving with PFR codes (GNB, NWE, etc.).
+                """
+                if "player" not in df.columns:
                     return []
-                mask = df["team_key"] == key
-                return list(df.loc[mask, "player"].dropna().unique())
+
+                # Primary normalized key from game schedule ("Green Bay Packers" → "GB")
+                key = team_key(team_name_or_label)
+
+                # First try: match on normalized team_key
+                if "team_key" in df.columns:
+                    mask = df["team_key"] == key
+                else:
+                    mask = pd.Series(False, index=df.index)
+
+                # If we got results, great
+                if mask.any():
+                    return list(df.loc[mask, "player"].dropna().unique())
+
+                # --- Fallbacks for tricky cases (like Packers) ---
+
+                # Known PFR mapping (standard → PFR)
+                pfr_from_std = {
+                    "NE": "NWE",
+                    "GB": "GNB",
+                    "KC": "KAN",
+                    "TB": "TAM",
+                    "NO": "NOR",
+                    "SF": "SFO",
+                    "LV": "LVR",
+                    "LAR": "RAM",
+                }
+
+                df_team_upper = df.get("team", pd.Series("", index=df.index)).astype(str).str.upper()
+
+                # 1) If this is a team with a PFR code, try that directly
+                if key in pfr_from_std:
+                    pfr_code = pfr_from_std[key]
+                    mask_pfr = df_team_upper == pfr_code
+                    if mask_pfr.any():
+                        return list(df.loc[mask_pfr, "player"].dropna().unique())
+
+                # 2) As a last resort: if df['team'] already contains the standard code (e.g. 'GB'), use that
+                mask_std = df_team_upper == key
+                if mask_std.any():
+                    return list(df.loc[mask_std, "player"].dropna().unique())
+
+                # If all else fails, return empty
+                return []
 
             team_players = set(
                 players_for_team(qb_df, selected_team)
