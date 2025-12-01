@@ -20,7 +20,7 @@ WR_STATS_URL = "https://docs.google.com/spreadsheets/d/1Gwb2A-a4ge7UKHnC7wUpJltg
 RB_STATS_URL = "https://docs.google.com/spreadsheets/d/11vYTC2o-WOOyN_oVuqq-hArgwdsPfvQWJWqiISK0bUg/export?format=csv"
 TE_STATS_URL = "https://docs.google.com/spreadsheets/d/1tAFG33Mh2WlDWAAobEJFbFS6A_7mdp0RjHanolrqTgs/export?format=csv"
 
-# NEW: Player game logs (every game this year)
+# Player game logs (every game this year)
 PLAYER_GAME_LOG_URL = "https://docs.google.com/spreadsheets/d/1iJNtTJcC3zv0Qvb7LxynF1tTPlggN8hOpQP-ROnPda8/export?format=csv"
 
 # How many recent games to use for trend vs season
@@ -64,7 +64,7 @@ TEAM_ALIAS_TO_CODE = {
     "washington commanders": "WAS", "commanders": "WAS", "washington": "WAS", "was": "WAS", "wsh": "WAS",
     "washington football team": "WAS", "redskins": "WAS",
 
-    # PFR-style 3-letter codes from your sheets
+    # 3-letter PFR-style codes from your sheets
     "nwe": "NE",
     "gnb": "GB",
     "kan": "KC",
@@ -97,16 +97,16 @@ def team_key(name: str) -> str:
     s_raw = str(name).strip()
     s_lower = s_raw.lower()
 
-    # 1) Direct lookup
+    # Direct lookup
     if s_lower in TEAM_ALIAS_TO_CODE:
         return TEAM_ALIAS_TO_CODE[s_lower]
 
-    # 2) Strip non-letters (handles things like 'GNB ' or 'GNB*')
+    # Strip non-letters
     s_clean = re.sub(r"[^a-z]", "", s_lower)
     if s_clean in TEAM_ALIAS_TO_CODE:
         return TEAM_ALIAS_TO_CODE[s_clean]
 
-    # 3) Handle comma-separated strings like "cin,cle" → first chunk
+    # Comma-separated strings like "cin,cle" → first chunk
     if "," in s_lower:
         first = s_lower.split(",")[0].strip()
         if first in TEAM_ALIAS_TO_CODE:
@@ -115,12 +115,12 @@ def team_key(name: str) -> str:
         if first_clean in TEAM_ALIAS_TO_CODE:
             return TEAM_ALIAS_TO_CODE[first_clean]
 
-    # 4) Fallback: if the cleaned 2–3 letter upper matches a known code, use it
+    # Fallback: if cleaned 2–3 letter upper matches a known code, use it
     cand = s_clean.upper()
     if cand in CODE_TO_FULLNAME:
         return cand
 
-    return cand  # stable "unknown"
+    return cand  # stable unknown
 
 # =========================
 # Sidebar: Cache refresh
@@ -131,13 +131,11 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-# =========================
-# Session state for My Bets
-# =========================
-if "my_bets_props" not in st.session_state:
-    st.session_state.my_bets_props = []   # list of dicts
-if "my_bets_parlays" not in st.session_state:
-    st.session_state.my_bets_parlays = [] # list of dicts
+# Ensure my_bets + parlay_legs exist
+if "my_bets" not in st.session_state:
+    st.session_state.my_bets = []
+if "parlay_legs" not in st.session_state:
+    st.session_state.parlay_legs = []
 
 # =========================
 # Helpers
@@ -222,6 +220,14 @@ def load_scores() -> pd.DataFrame:
     if "spread" in df.columns:
         df["spread"] = pd.to_numeric(df["spread"], errors="coerce")
     if "home_team" in df.columns:
+        df["home_team"] = df["home_team"].astype(str)
+    if "away_team" in df.columns:
+        df["away_team"] = df["away_team"].astype(str)
+    if "favored_team" in df.columns:
+        df["favored_team"] = df["favored_team"].astype(str)
+    if "week" in df.columns:
+        df["week"] = pd.to_numeric(df["week"], errors="coerce")
+    if "home_team" in df.columns:
         df["home_key"] = df["home_team"].apply(team_key)
     if "away_team" in df.columns:
         df["away_key"] = df["away_team"].apply(team_key)
@@ -281,7 +287,6 @@ def load_player_game_log(url: str) -> pd.DataFrame:
     df = pd.read_csv(url)
     df.columns = [normalize_header(c) for c in df.columns]
 
-    # Normalize player/team/opponent/date
     if "player" in df.columns:
         df["player"] = df["player"].astype(str).str.strip()
     else:
@@ -346,7 +351,7 @@ def load_team_game_log(url: str) -> pd.DataFrame:
     idx = find_col(norm_cols, ["result"], contains_ok=True)
     if idx is not None: mapper["result"] = df.columns[idx]
 
-    # Defensive columns used for props:
+    # Defensive columns
     for c in ["passing_yards_gained_by_opposition", "rushing_yards_by_opposition", "rushing_attempts_by_opposition"]:
         if c in df.columns:
             mapper[c] = c
@@ -604,6 +609,7 @@ def prop_prediction_and_probs(
             "td_rate": td_rate,
             "td_total": td_total,
             "games_played": games_played,
+            "player_team_key": str(row.get("team_key", "")).strip(),
         }
 
     # Season total + per-game
@@ -620,7 +626,7 @@ def prop_prediction_and_probs(
     else:
         trend_factor = float(np.clip(recent_pg / season_pg, 0.4, 1.8))
 
-    # Determine which team is the defense in this context
+    # Determine which team is the defense
     player_team_key = str(row.get("team_key", "")).strip()
     if selected_team_key:
         if player_team_key and player_team_key == selected_team_key:
@@ -628,7 +634,6 @@ def prop_prediction_and_probs(
         else:
             def_team_key = selected_team_key
     else:
-        # In generic contexts (parlay builder), we only know the opponent explicitly
         def_team_key = opponent_key
 
     def_factor = get_def_factor(team_log_df, def_team_key, selected_prop)
@@ -637,7 +642,7 @@ def prop_prediction_and_probs(
     predicted_pg = season_pg * overall_adj_factor
 
     stdev = max(3.0, predicted_pg * 0.35)
-    z = (line_val - predicted_pg) / stdev
+    z = (line_val - predicted_pg) / stdev if stdev > 0 else 0.0
     prob_over = float(np.clip(1 - norm.cdf(z), 0.001, 0.999))
     prob_under = float(np.clip(norm.cdf(z), 0.001, 0.999))
 
@@ -698,6 +703,57 @@ def prob_spread_cover(scores_df: pd.DataFrame, home: str, away: str, home_spread
     p_away_cover = 1.0 - p_home_cover
     return (pred_margin, p_home_cover) if side == "home" else (pred_margin, p_away_cover)
 
+# --------------------------
+# PDF helper for "My Bets"
+# --------------------------
+def my_bets_to_text(bets: list) -> str:
+    if not bets:
+        return "No bets saved."
+    lines = ["My Bets\n", "----------------------"]
+    for i, b in enumerate(bets, start=1):
+        if b.get("type") == "parlay":
+            lines.append(f"{i}. PARLAY: {b.get('label','')}")
+            lines.append(f"   Hit Probability: {b.get('hit_prob',0)*100:.1f}%")
+            legs = b.get("legs", [])
+            for j, lg in enumerate(legs, start=1):
+                lines.append(f"     Leg {j}: {lg.get('label','')} (Pr: {lg.get('prob',0)*100:.1f}%)")
+        else:
+            lines.append(f"{i}. {b.get('label','')}")
+            p_over = b.get("prob_over")
+            p_under = b.get("prob_under")
+            p_any = b.get("prob_anytime")
+            if p_any is not None:
+                lines.append(f"   Anytime TD Prob: {p_any*100:.1f}%")
+            else:
+                if p_over is not None:
+                    lines.append(f"   Over Prob: {p_over*100:.1f}%")
+                if p_under is not None:
+                    lines.append(f"   Under Prob: {p_under*100:.1f}%")
+        lines.append("")
+    return "\n".join(lines)
+
+def create_pdf_from_text(text: str):
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.pdfgen import canvas
+    except ImportError:
+        return None, "Python package 'reportlab' is not installed. Add it to your environment to enable PDF export."
+
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=letter)
+    width, height = letter
+    y = height - 40
+    for line in text.split("\n"):
+        c.drawString(40, y, line)
+        y -= 14
+        if y < 40:
+            c.showPage()
+            y = height - 40
+    c.save()
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+    return pdf_bytes, None
+
 # =========================
 # UI – Main
 # =========================
@@ -739,7 +795,7 @@ section_names = [
     "3) Player Props",
     "4) Parlay Builder (Players + Game Markets)",
     "5) Team Game Log & Trends (NEW)",
-    "6) My Bets"
+    "6) My Bets & Export",
 ]
 selected_section = st.selectbox("Jump to section", section_names, index=0, help="Pick a section to open")
 
@@ -770,10 +826,9 @@ with st.expander("1) Game Selection + Prediction", expanded=(selected_section ==
         home_team = g["home_team"]
         away_team = g["away_team"]
         opponent = away_team if home_team == selected_team else home_team
-        matchup_str = f"{away_team} @ {home_team}"
 
         with cols[2]:
-            st.markdown(f"**Matchup:** {matchup_str}")
+            st.markdown(f"**Matchup:** {away_team} @ {home_team}")
 
         default_ou = float(g["over_under"]) if pd.notna(g.get("over_under", np.nan)) else 45.0
         default_home_spread = float(g["home_spread"]) if pd.notna(g.get("home_spread", np.nan)) else 0.0
@@ -923,6 +978,7 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
     else:
         selected_team = st.session_state['sec1_team']
         selected_week = st.session_state['sec1_week']
+
         game_row = scores_df[
             ((scores_df["home_team"] == selected_team) | (scores_df["away_team"] == selected_team))
             & (scores_df["week"] == selected_week)
@@ -934,12 +990,9 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
             home_team = g["home_team"]
             away_team = g["away_team"]
             opponent = away_team if home_team == selected_team else home_team
-            matchup_str = f"{away_team} @ {home_team}"
 
+            # Helper to gather players for a team
             def players_for_team(df: pd.DataFrame, team_name_or_label: str):
-                """
-                Extra-forgiving mapping so Packers (GNB / GB) etc always work.
-                """
                 if "player" not in df.columns:
                     return []
                 key = team_key(team_name_or_label)
@@ -952,7 +1005,6 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
                 if mask.any():
                     return list(df.loc[mask, "player"].dropna().unique())
 
-                # PFR mapping fallback
                 pfr_from_std = {
                     "NE": "NWE",
                     "GB": "GNB",
@@ -994,7 +1046,7 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
             if not both_players:
                 st.info(f"No players found for this matchup. Keys — You: **{team_key(selected_team)}**, Opp: **{team_key(opponent)}**.")
 
-            c1, c2, c3, c4 = st.columns([2, 1.2, 1.2, 1.2])
+            c1, c2, c3 = st.columns([2, 1.2, 1.2])
             with c1:
                 player_name = st.selectbox("Select Player", [""] + both_players, key="player_pick_props")
             with c2:
@@ -1003,8 +1055,6 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
             with c3:
                 default_line = 50.0 if selected_prop != "anytime_td" else 0.0
                 line_val = st.number_input("Sportsbook Line", value=float(default_line), key="prop_line") if selected_prop != "anytime_td" else 0.0
-            with c4:
-                bet_side_for_save = st.selectbox("Side (for My Bets)", ["over","under"], key="prop_bet_side") if selected_prop != "anytime_td" else "yes"
 
             if player_name:
                 res = prop_prediction_and_probs(
@@ -1026,23 +1076,36 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
                     st.warning(res["error"])
                 elif selected_prop == "anytime_td":
                     st.subheader("Anytime TD Probability")
-                    st.write(f"Estimated Anytime TD Probability: **{res['prob_anytime']*100:.1f}%**")
+                    st.write(f"**Estimated Anytime TD Probability:** {res['prob_anytime']*100:.1f}%")
+
                     bar_df = pd.DataFrame({"Category": ["TDs/Game"], "Value": [res["td_rate"]]})
                     st.plotly_chart(px.bar(bar_df, x="Category", y="Value", title=f"{player_name} – Anytime TD"), use_container_width=True)
 
-                    if st.button("➕ Add to My Bets", key="add_prop_anytime"):
-                        bet_record = {
-                            "type": "prop",
-                            "week": int(selected_week),
-                            "game": matchup_str,
+                    # --- Add to My Bets button for anytime TD ---
+                    safe_week_val = g.get("week", None)
+                    try:
+                        safe_week_int = int(safe_week_val) if pd.notna(safe_week_val) else None
+                    except Exception:
+                        safe_week_int = None
+
+                    label = f"{player_name} Anytime TD vs {opponent} (Week {safe_week_int if safe_week_int is not None else '?'})"
+                    if st.button("⭐ Add to My Bets", key="add_bet_anytime"):
+                        st.session_state.my_bets.append({
+                            "type": "player",
+                            "label": label,
                             "player": player_name,
-                            "prop": "Anytime TD",
-                            "side": "Yes",
-                            "line": "",
-                            "model_prob": float(res["prob_anytime"]),
-                        }
-                        st.session_state.my_bets_props.append(bet_record)
-                        st.success("Added to My Bets.")
+                            "prop": selected_prop,
+                            "line": None,
+                            "side": "yes",
+                            "team": selected_team,
+                            "opponent": opponent,
+                            "matchup": f"{away_team} @ {home_team}",
+                            "week": safe_week_int,
+                            "prob_over": None,
+                            "prob_under": None,
+                            "prob_anytime": float(res["prob_anytime"]),
+                        })
+                        st.success("Added to My Bets ✅")
                 else:
                     st.subheader(selected_prop.replace("_", " ").title())
                     st.write(f"**Season Total:** {res['season_total']:.1f}")
@@ -1052,15 +1115,26 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
                         st.write(f"**Last {PROP_TREND_LAST_N} games (avg):** {res['recent_pg']:.2f}")
                     st.write(f"**Trend factor (last {PROP_TREND_LAST_N} vs season):** {res['trend_factor']:.3f}")
 
-                    # ✅ FIXED: show the actual defense team used for the factor
-                    def_team_full = CODE_TO_FULLNAME.get(res["def_team_key"], res["def_team_key"])
-                    st.write(f"**Defense factor (vs {def_team_full}):** {res['def_factor']:.3f}")
+                    # Determine correct defense label from res['def_team_key']
+                    def_team_key_res = res.get("def_team_key")
+                    opp_key = team_key(opponent)
+                    sel_key = team_key(selected_team)
+                    if def_team_key_res == opp_key:
+                        def_label = opponent
+                    elif def_team_key_res == sel_key:
+                        def_label = selected_team
+                    elif def_team_key_res in CODE_TO_FULLNAME:
+                        def_label = CODE_TO_FULLNAME[def_team_key_res]
+                    else:
+                        def_label = def_team_key_res if def_team_key_res else "Unknown"
 
+                    st.write(f"**Defense factor (vs {def_label}):** {res['def_factor']:.3f}")
                     st.write(f"**Overall adjustment factor:** {res['overall_adj_factor']:.3f}")
                     st.write(f"**Adjusted prediction (this game):** {res['predicted_pg']:.2f}")
                     st.write(f"**Line:** {line_val:.1f}")
                     st.write(f"**Probability of OVER:** {res['prob_over']*100:.1f}%")
                     st.write(f"**Probability of UNDER:** {res['prob_under']*100:.1f}%")
+
                     st.plotly_chart(
                         px.bar(
                             x=["Season PG", f"Last {PROP_TREND_LAST_N} PG", "Adjusted Prediction", "Line"],
@@ -1075,21 +1149,34 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
                         use_container_width=True
                     )
 
-                    if st.button("➕ Add to My Bets", key="add_prop_bet"):
-                        side = bet_side_for_save
-                        model_prob = float(res["prob_over"] if side == "over" else res["prob_under"])
-                        bet_record = {
-                            "type": "prop",
-                            "week": int(selected_week),
-                            "game": matchup_str,
+                    # --- Add to My Bets button for regular props ---
+                    safe_week_val = g.get("week", None)
+                    try:
+                        safe_week_int = int(safe_week_val) if pd.notna(safe_week_val) else None
+                    except Exception:
+                        safe_week_int = None
+
+                    side_choice = st.radio("Side for My Bets", ["over","under"], horizontal=True, key="mybets_side_choice")
+                    chosen_prob = float(res["prob_over"] if side_choice == "over" else res["prob_under"])
+                    label = f"{player_name} {selected_prop.replace('_',' ').title()} {side_choice.title()} {line_val} vs {opponent} (Week {safe_week_int if safe_week_int is not None else '?'})"
+
+                    if st.button("⭐ Add to My Bets", key="add_bet_regular"):
+                        st.session_state.my_bets.append({
+                            "type": "player",
+                            "label": label,
                             "player": player_name,
-                            "prop": selected_prop.replace("_", " "),
-                            "side": side.title(),
+                            "prop": selected_prop,
                             "line": float(line_val),
-                            "model_prob": model_prob,
-                        }
-                        st.session_state.my_bets_props.append(bet_record)
-                        st.success("Added to My Bets.")
+                            "side": side_choice,
+                            "team": selected_team,
+                            "opponent": opponent,
+                            "matchup": f"{away_team} @ {home_team}",
+                            "week": safe_week_int,
+                            "prob_over": float(res["prob_over"]),
+                            "prob_under": float(res["prob_under"]),
+                            "prob_anytime": None,
+                        })
+                        st.success("Added to My Bets ✅")
             else:
                 st.info("Select a player to evaluate props.")
 
@@ -1097,9 +1184,6 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
 # Section 4: Parlay Builder
 # -------------------------
 with st.expander("4) Parlay Builder (Players + Game Markets)", expanded=(selected_section == section_names[3])):
-    if "parlay_legs" not in st.session_state:
-        st.session_state.parlay_legs = []
-
     def unique_players(*dfs):
         names = []
         for df in dfs:
@@ -1118,7 +1202,8 @@ with st.expander("4) Parlay Builder (Players + Game Markets)", expanded=(selecte
         pb_prop = st.selectbox("Prop", ["passing_yards","rushing_yards","receiving_yards","receptions","targets","carries","anytime_td"], key="pb_any_prop")
     with a3:
         if pb_prop == "anytime_td":
-            pb_line = 0.0; pb_side = "yes"
+            pb_line = 0.0
+            pb_side = "yes"
             st.text_input("Line", "—", disabled=True, key="pb_any_line_disabled")
         else:
             pb_line = st.number_input("Line", value=50.0, step=0.5, key="pb_any_line")
@@ -1240,26 +1325,13 @@ with st.expander("4) Parlay Builder (Players + Game Markets)", expanded=(selecte
         model_am_odds = prob_to_american(parlay_hit_prob)
 
         st.markdown("---")
-        b1, b2, b3, b4 = st.columns([1.2, 1, 1, 1.2])
+        b1, b2, b3 = st.columns([1.2, 1, 1])
         with b1:
             book_total_american = st.text_input("Book Total Parlay Odds (American, e.g. +650)", value="", key="book_any_odds")
         with b2:
             stake = st.number_input("Stake ($)", value=100.0, step=10.0, min_value=0.0, key="book_any_stake")
         with b3:
             st.metric("Model Parlay Prob.", f"{parlay_hit_prob*100:.1f}%")
-        with b4:
-            # Save full parlay to My Bets
-            if st.button("➕ Save Parlay to My Bets", key="save_parlay_my_bets"):
-                description = " | ".join([leg["label"] for leg in st.session_state.parlay_legs])
-                parlay_record = {
-                    "type": "parlay",
-                    "legs_count": len(st.session_state.parlay_legs),
-                    "description": description,
-                    "model_prob": parlay_hit_prob,
-                    "model_fair_odds": int(model_am_odds),
-                }
-                st.session_state.my_bets_parlays.append(parlay_record)
-                st.success("Parlay saved to My Bets.")
 
         if book_total_american.strip():
             try:
@@ -1274,6 +1346,16 @@ with st.expander("4) Parlay Builder (Players + Game Markets)", expanded=(selecte
                 st.warning("Could not parse the book odds you entered. Use a number like +650 or -120.")
         else:
             st.metric("Model Fair Odds", f"{int(model_am_odds):+d}")
+
+        # --- Add whole parlay to My Bets ---
+        if st.button("⭐ Add This Parlay to My Bets", key="add_parlay_to_bets"):
+            st.session_state.my_bets.append({
+                "type": "parlay",
+                "label": f"Parlay with {len(st.session_state.parlay_legs)} legs",
+                "legs": [dict(leg) for leg in st.session_state.parlay_legs],
+                "hit_prob": parlay_hit_prob,
+            })
+            st.success("Parlay added to My Bets ✅")
     else:
         st.info("Add legs above to build your parlay. Mix player props and game markets. We'll multiply probabilities for the parlay hit rate.")
 
@@ -1317,7 +1399,7 @@ with st.expander("5) Team Game Log & Trends (NEW)", expanded=(selected_section =
             if "cover_result_norm" in sub.columns:
                 cvals = sub["cover_result_norm"].dropna().astype(str).str.lower()
                 cover_yes = (cvals == "covered").sum()
-                cover_no = (cvals == "did_not_cover").sum() if "did_not_cover" in cvals.values else (cvals == "did not cover").sum()
+                cover_no = (cvals == "did not cover").sum()
                 cover_total = (cvals.isin(["covered","did not cover"])).sum()
 
             m1, m2, m3 = st.columns(3)
@@ -1365,44 +1447,64 @@ with st.expander("5) Team Game Log & Trends (NEW)", expanded=(selected_section =
                 st.dataframe(pretty, use_container_width=True)
 
 # -------------------------
-# Section 6: My Bets
+# Section 6: My Bets & Export
 # -------------------------
-with st.expander("6) My Bets", expanded=(selected_section == section_names[5])):
-    st.subheader("Saved Single Props")
-    if not st.session_state.my_bets_props:
-        st.info("No single props saved yet. Add some from the Player Props or Parlay Builder sections.")
+with st.expander("6) My Bets & Export", expanded=(selected_section == section_names[5])):
+    bets = st.session_state.my_bets
+    if not bets:
+        st.info("You don't have any saved bets yet. Add some from the Player Props or Parlay Builder sections.")
     else:
-        props_df = pd.DataFrame(st.session_state.my_bets_props)
-        st.dataframe(props_df, use_container_width=True)
-        # Download as CSV
-        buf = io.StringIO()
-        props_df.to_csv(buf, index=False)
-        st.download_button(
-            label="⬇️ Download Props as CSV",
-            data=buf.getvalue(),
-            file_name="my_bets_props.csv",
-            mime="text/csv",
-        )
+        st.subheader("Saved Bets")
 
-    st.markdown("---")
-    st.subheader("Saved Parlays")
-    if not st.session_state.my_bets_parlays:
-        st.info("No parlays saved yet. Save one from the Parlay Builder section.")
-    else:
-        parlays_df = pd.DataFrame(st.session_state.my_bets_parlays)
-        st.dataframe(parlays_df, use_container_width=True)
-        buf2 = io.StringIO()
-        parlays_df.to_csv(buf2, index=False)
-        st.download_button(
-            label="⬇️ Download Parlays as CSV",
-            data=buf2.getvalue(),
-            file_name="my_bets_parlays.csv",
-            mime="text/csv",
-        )
+        singles = [b for b in bets if b.get("type") != "parlay"]
+        parlays = [b for b in bets if b.get("type") == "parlay"]
 
-    st.markdown("---")
-    if st.button("🧹 Clear ALL My Bets (props + parlays)", type="secondary"):
-        st.session_state.my_bets_props = []
-        st.session_state.my_bets_parlays = []
-        st.success("Cleared all My Bets.")
-        st.rerun()
+        if singles:
+            st.markdown("### Single Player / Game Bets")
+            sing_rows = []
+            for b in singles:
+                sing_rows.append({
+                    "Label": b.get("label",""),
+                    "Player": b.get("player",""),
+                    "Prop": b.get("prop",""),
+                    "Side": b.get("side",""),
+                    "Line": b.get("line",""),
+                    "Matchup": b.get("matchup",""),
+                    "Week": b.get("week",""),
+                    "Prob Over": b.get("prob_over"),
+                    "Prob Under": b.get("prob_under"),
+                    "Prob Anytime TD": b.get("prob_anytime"),
+                })
+            st.dataframe(pd.DataFrame(sing_rows), use_container_width=True)
+
+        if parlays:
+            st.markdown("### Parlay Bets")
+            par_rows = []
+            for b in parlays:
+                par_rows.append({
+                    "Label": b.get("label",""),
+                    "Legs (#)": len(b.get("legs",[])),
+                    "Hit Probability": b.get("hit_prob",0)*100,
+                })
+            st.dataframe(pd.DataFrame(par_rows), use_container_width=True)
+
+        st.markdown("---")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("🗑 Clear All My Bets", use_container_width=True, key="clear_my_bets"):
+                st.session_state.my_bets = []
+                st.success("Cleared all saved bets.")
+                st.rerun()
+        with c2:
+            text_summary = my_bets_to_text(bets)
+            pdf_bytes, pdf_err = create_pdf_from_text(text_summary)
+            if pdf_bytes is not None:
+                st.download_button(
+                    "📄 Download My Bets as PDF",
+                    data=pdf_bytes,
+                    file_name="my_bets.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+            else:
+                st.info(pdf_err or "PDF export not available in this environment.")
