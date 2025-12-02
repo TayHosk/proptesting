@@ -337,7 +337,7 @@ def load_team_game_log(url: str) -> pd.DataFrame:
         mapper["home_away_flag"] = df.columns[idx]
 
     idx = find_col(norm_cols, ["opponent"])
-    if idx is notNone:
+    if idx is not None:
         mapper["opponent"] = df.columns[idx]
     idx = find_col(norm_cols, ["over_under_line"])
     if idx is not None:
@@ -717,7 +717,7 @@ def prob_spread_cover(scores_df: pd.DataFrame, home: str, away: str, home_spread
 st.title("🏈 The Official un-official NFL Betting Model")
 
 with st.expander("📘 How This Model Works", expanded=False):
-    st.markdown(" " ")
+    st.markdown("""
 - **Team projections:** based on historical scoring, calibrated to league averages, plus optional log-based adjustments.
 - **Player props:**
   - Season per-game → baseline.
@@ -725,13 +725,13 @@ with st.expander("📘 How This Model Works", expanded=False):
   - **Opponent defense** (yards allowed this year) → matchup factor.
   - Adjusted prediction = Season PG × Trend Factor × Defense Factor.
 - **My Bets:** save singles and parlays as you go; see their probabilities together.
-\"\"\")
+""")
 
 with st.expander("📱 Add This App to Your Home Screen (Recommended)", expanded=False):
-    st.markdown(\"\"\"
+    st.markdown("""
 **iPhone/iPad:** Share → Add to Home Screen  
 **Android (Chrome):** ⋮ → Add to Home Screen
-\"\"\")
+""")
 
 scores_df = load_scores()
 if scores_df.empty:
@@ -1066,7 +1066,7 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
 
                     fig = px.bar(
                         x=["Season PG", f"Last {PROP_TREND_LAST_N} PG", "Adjusted Prediction", "Line"],
-                        y[
+                        y=[
                             res["season_pg"],
                             res["recent_pg"] if res["recent_pg"] is not None else 0.0,
                             res["predicted_pg"],
@@ -1307,7 +1307,7 @@ with st.expander("4) Parlay Builder (Players + Game Markets)", expanded=(selecte
 # Section 5: Bulk Props Upload & Auto Parlay
 # -------------------------
 with st.expander("5) Bulk Props Upload & Auto Parlay", expanded=(selected_section == section_names[4])):
-    st.markdown(\"\"\"
+    st.markdown("""
 Upload a CSV with columns:
 
 - **Player**  
@@ -1321,7 +1321,7 @@ The model will:
 2. Pick the better side automatically.
 3. Score each prop.
 4. Build the highest-probability parlay using your chosen leg count.
-\"\"\")
+""")
 
     uploaded = st.file_uploader("Upload bulk props CSV", type=["csv"], key="bulk_props_upload")
     if uploaded is not None:
