@@ -74,14 +74,14 @@ TEAM_ALIAS_TO_CODE = {
     "ram": "LAR",
 }
 CODE_TO_FULLNAME = {
-    "ARI": "Arizona Cardinals", "ATL": "Atlanta Falcons", "BAL": "Baltimore Ravens", "BUF": "Buffalo Bills",
-    "CAR": "Carolina Panthers", "CHI": "Chicago Bears", "CIN": "Cincinnati Bengals", "CLE": "Cleveland Browns",
-    "DAL": "Dallas Cowboys", "DEN": "Denver Broncos", "DET": "Detroit Lions", "GB": "Green Bay Packers",
-    "HOU": "Houston Texans", "IND": "Indianapolis Colts", "JAX": "Jacksonville Jaguars", "KC": "Kansas City Chiefs",
-    "LAC": "Los Angeles Chargers", "LAR": "Los Angeles Rams", "LV": "Las Vegas Raiders", "MIA": "Miami Dolphins",
-    "MIN": "Minnesota Vikings", "NE": "New England Patriots", "NO": "New Orleans Saints", "NYG": "New York Giants",
-    "NYJ": "New York Jets", "PHI": "Philadelphia Eagles", "PIT": "Pittsburgh Steelers", "SEA": "Seattle Seahawks",
-    "SF": "San Francisco 49ers", "TB": "Tampa Bay Buccaneers", "TEN": "Tennessee Titans", "WAS": "Washington Commanders"
+    "ARI": "Arizona Cardinals","ATL": "Atlanta Falcons","BAL": "Baltimore Ravens","BUF": "Buffalo Bills",
+    "CAR": "Carolina Panthers","CHI": "Chicago Bears","CIN": "Cincinnati Bengals","CLE": "Cleveland Browns",
+    "DAL": "Dallas Cowboys","DEN": "Denver Broncos","DET": "Detroit Lions","GB": "Green Bay Packers",
+    "HOU": "Houston Texans","IND": "Indianapolis Colts","JAX": "Jacksonville Jaguars","KC": "Kansas City Chiefs",
+    "LAC": "Los Angeles Chargers","LAR": "Los Angeles Rams","LV": "Las Vegas Raiders","MIA": "Miami Dolphins",
+    "MIN": "Minnesota Vikings","NE": "New England Patriots","NO": "New Orleans Saints","NYG": "New York Giants",
+    "NYJ": "New York Jets","PHI": "Philadelphia Eagles","PIT": "Pittsburgh Steelers","SEA": "Seattle Seahawks",
+    "SF": "San Francisco 49ers","TB": "Tampa Bay Buccaneers","TEN": "Tennessee Titans","WAS": "Washington Commanders"
 }
 FULLNAME_TO_CODE = {v: k for k, v in CODE_TO_FULLNAME.items()}
 
@@ -1054,6 +1054,7 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
                         st.write(f"**Last {PROP_TREND_LAST_N} games (avg):** {res['recent_pg']:.2f}")
                     st.write(f"**Trend factor (last {PROP_TREND_LAST_N} vs season):** {res['trend_factor']:.3f}")
 
+                    # Nice label: use opponent's full name if possible
                     def_team_code = res.get("def_team_key", "")
                     def_team_label = CODE_TO_FULLNAME.get(def_team_code, opponent)
                     st.write(f"**Defense factor (vs {def_team_label}):** {res['def_factor']:.3f}")
@@ -1075,6 +1076,7 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
                     )
                     st.plotly_chart(fig, use_container_width=True)
 
+                    # ----- Add to My Bets -----
                     add_col1, add_col2 = st.columns([2, 1])
                     with add_col1:
                         st.markdown("### Save to My Bets")
@@ -1104,12 +1106,13 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
                             }
                             st.session_state["my_bets"].append(bet_entry)
                             st.success("Added to My Bets ✅")
+
             else:
                 st.info("Select a player to evaluate props.")
 
 
 # -------------------------
-# Section 4: Parlay Builder (Players + Game Markets)
+# Section 4: Parlay Builder
 # -------------------------
 with st.expander("4) Parlay Builder (Players + Game Markets)", expanded=(selected_section == section_names[3])):
     if "parlay_legs" not in st.session_state:
@@ -1221,6 +1224,7 @@ with st.expander("4) Parlay Builder (Players + Game Markets)", expanded=(selecte
         else:
             gm_spread = st.number_input("Home-based Spread", value=float(default_home_sp), step=0.5, key="gm_spread_line")
 
+    # Show model prob for this leg
     if gm_home and gm_away:
         if gm_market == "Total":
             _, p_over, p_under = prob_total_over_under(scores_df, gm_home, gm_away, gm_total)
@@ -1263,6 +1267,7 @@ with st.expander("4) Parlay Builder (Players + Game Markets)", expanded=(selecte
                 })
             st.success("Added leg to parlay ✅")
 
+    # Show current legs & overall parlay prob
     if st.session_state["parlay_legs"]:
         st.subheader("Current Parlay Legs")
         for i, leg in enumerate(st.session_state["parlay_legs"]):
@@ -1293,6 +1298,7 @@ with st.expander("4) Parlay Builder (Players + Game Markets)", expanded=(selecte
             }
             st.session_state["my_bets"].append(parlay_bet)
             st.success("Saved parlay to My Bets ✅")
+
     else:
         st.info("Add legs above to build a parlay.")
 
@@ -1476,6 +1482,7 @@ with st.expander("6) My Bets", expanded=(selected_section == section_names[5])):
                 st.success("Cleared all bets.")
                 st.rerun()
         with col2:
+            # Simple CSV export of all bets (flattened)
             flat_rows = []
             for b in bets:
                 if b.get("type") == "player_prop":
@@ -1509,7 +1516,7 @@ with st.expander("6) My Bets", expanded=(selected_section == section_names[5])):
 
 
 # -------------------------
-# Section 7: Team Game Log & Trends (NEW)
+# Section 7: Team Game Log & Trends
 # -------------------------
 with st.expander("7) Team Game Log & Trends (NEW)", expanded=(selected_section == section_names[6])):
     if team_log_df is None or team_log_df.empty:
