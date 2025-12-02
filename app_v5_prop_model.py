@@ -5,57 +5,7 @@ from scipy.stats import norm
 import plotly.express as px
 import re
 
-st.set_page_config(page_title="NFL Betting Model", page_icon="🏈", layout="wide")
-
-# =========================
-# Light / Brighter UI Theme
-# =========================
-st.markdown(
-    """
-    <style>
-    /* Overall background */
-    .main {
-        background: radial-gradient(circle at top left, #e0f2fe 0, #ffffff 45%, #fef3c7 100%);
-    }
-
-    /* Center content and give it breathing room */
-    .block-container {
-        padding-top: 1.2rem;
-        padding-bottom: 2.5rem;
-        max-width: 1200px;
-    }
-
-    /* Make metrics feel like cards */
-    .stMetric {
-        background-color: rgba(255,255,255,0.92);
-        padding: 0.75rem 0.75rem 0.6rem 0.75rem;
-        border-radius: 0.75rem;
-        box-shadow: 0 4px 10px rgba(15,23,42,0.08);
-    }
-
-    /* Dataframe / table “card” look */
-    .stDataFrame, .stTable {
-        background-color: rgba(255,255,255,0.95);
-        border-radius: 0.75rem;
-        padding: 0.4rem;
-        box-shadow: 0 2px 8px rgba(15,23,42,0.06);
-    }
-
-    /* Expander headers a bit bolder */
-    .streamlit-expanderHeader {
-        font-weight: 600;
-        font-size: 1rem;
-    }
-
-    /* Section selectbox spacing */
-    .stSelectbox > label {
-        font-weight: 600;
-    }
-
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+st.set_page_config(page_title="NFL Betting Model", layout="wide")
 
 # =========================
 # Data Sources (Google Sheets)
@@ -177,8 +127,7 @@ if "parlay_legs" not in st.session_state:
 # Sidebar: Cache refresh
 # =========================
 with st.sidebar:
-    st.header("Data & Settings")
-    st.caption("If Google Sheets were updated, refresh below.")
+    st.header("Data")
     if st.button("🔄 Clear cache & reload data", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
@@ -1117,487 +1066,562 @@ with st.expander("3) Player Props", expanded=(selected_section == section_names[
 
                     fig = px.bar(
                         x=["Season PG", f"Last {PROP_TREND_LAST_N} PG", "Adjusted Prediction", "Line"],
-                        y[
-                                        y=[
-                        res["season_pg"],
-                        res["recent_pg"] if res["recent_pg"] is not None else 0.0,
-                        res["predicted_pg"],
-                        line_val,
-                    ],
-                    title=f"{player_name} – {selected_prop.replace('_', ' ').title()}",
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                        y=[
+                            res["season_pg"],
+                            res["recent_pg"] if res["recent_pg"] is not None else 0.0,
+                            res["predicted_pg"],
+                            line_val,
+                        ],
+                        title=f"{player_name} – {selected_prop.replace('_', ' ').title()}",
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
 
-                # ----- Add to My Bets -----
-                add_col1, add_col2 = st.columns([2, 1])
-                with add_col1:
-                    st.markdown("### Save to My Bets")
-                with add_col2:
-                    if st.button("➕ Add this prop to My Bets", key="add_prop_to_bets"):
-                        side = "over" if res["prob_over"] >= res["prob_under"] else "under"
-                        model_prob = float(res["prob_over"] if side == "over" else res["prob_under"])
-                        try:
-                            game_week = int(g["week"]) if "week" in g.index and pd.notna(g["week"]) else None
-                        except Exception:
-                            game_week = None
+                    # ----- Add to My Bets -----
+                    add_col1, add_col2 = st.columns([2, 1])
+                    with add_col1:
+                        st.markdown("### Save to My Bets")
+                    with add_col2:
+                        if st.button("➕ Add this prop to My Bets", key="add_prop_to_bets"):
+                            side = "over" if res["prob_over"] >= res["prob_under"] else "under"
+                            model_prob = float(res["prob_over"] if side == "over" else res["prob_under"])
+                            try:
+                                game_week = int(g["week"]) if "week" in g.index and pd.notna(g["week"]) else None
+                            except Exception:
+                                game_week = None
 
-                        bet_entry = {
-                            "type": "player_prop",
-                            "game": f"{away_team} @ {home_team}",
-                            "week": game_week,
-                            "player": player_name,
-                            "team": selected_team,
-                            "opponent": opponent,
-                            "prop": selected_prop,
-                            "side": side,
-                            "line": float(line_val),
-                            "model_prob": model_prob,
-                            "season_pg": res["season_pg"],
-                            "recent_pg": res["recent_pg"],
-                            "predicted_pg": res["predicted_pg"],
-                        }
-                        st.session_state["my_bets"].append(bet_entry)
-                        st.success("Added to My Bets ✅")
+                            bet_entry = {
+                                "type": "player_prop",
+                                "game": f"{away_team} @ {home_team}",
+                                "week": game_week,
+                                "player": player_name,
+                                "team": selected_team,
+                                "opponent": opponent,
+                                "prop": selected_prop,
+                                "side": side,
+                                "line": float(line_val),
+                                "model_prob": model_prob,
+                                "season_pg": res["season_pg"],
+                                "recent_pg": res["recent_pg"],
+                                "predicted_pg": res["predicted_pg"],
+                            }
+                            st.session_state["my_bets"].append(bet_entry)
+                            st.success("Added to My Bets ✅")
 
-        else:
-            st.info("Select a player to evaluate props.")
-
-def unique_players(*dfs):
-    names = []
-    for df in dfs:
-        if "player" in df.columns:
-            names.extend(list(df["player"].dropna().astype(str).unique()))
-    return sorted(pd.unique(names))
-
-all_players = unique_players(qb_df, wr_df, rb_df, te_df)
-full_team_names = sorted(list(CODE_TO_FULLNAME.values()))
-
-st.markdown("**Add Player Prop Leg**")
-a1, a2, a3, a4 = st.columns([2.2, 1.4, 1.4, 2])
-with a1:
-    pb_player = st.selectbox("Player", [""] + all_players, key="pb_any_player")
-with a2:
-    pb_prop = st.selectbox("Prop", ["passing_yards", "rushing_yards", "receiving_yards", "receptions", "targets", "carries", "anytime_td"], key="pb_any_prop")
-with a3:
-    if pb_prop == "anytime_td":
-        pb_line = 0.0
-        st.text_input("Line", "—", disabled=True, key="pb_any_line_disabled")
-    else:
-        pb_line = st.number_input("Line", value=50.0, step=0.5, key="pb_any_line")
-with a4:
-    pb_opp_full = st.selectbox("Opponent (Full Name)", full_team_names, key="pb_any_opp_full")
-    pb_opp_key = FULLNAME_TO_CODE.get(pb_opp_full, "")
-
-if st.button("➕ Add Player Leg", use_container_width=True, key="pb_any_add"):
-    if not pb_player:
-        st.warning("Pick a player first.")
-    elif not pb_opp_key:
-        st.warning("Pick an opponent team.")
-    else:
-        res = prop_prediction_and_probs(
-            player_name=pb_player,
-            selected_prop=pb_prop,
-            line_val=pb_line,
-            selected_team_key="",
-            opponent_key=pb_opp_key,
-            qb_df=qb_df,
-            wr_df=wr_df,
-            rb_df=rb_df,
-            te_df=te_df,
-            player_game_log_df=player_game_log_df,
-            team_log_df=team_log_df,
-            last_n_games=PROP_TREND_LAST_N,
-        )
-        if "error" in res:
-            st.warning(res["error"])
-        else:
-            if pb_prop == "anytime_td":
-                prob = float(res["prob_anytime"])
-                side = "yes"
-                label = f"{pb_player} Anytime TD vs {pb_opp_full}"
             else:
-                side = "over" if res["prob_over"] >= res["prob_under"] else "under"
-                prob = float(res["prob_over"] if side == "over" else res["prob_under"])
-                label = f"{pb_player} {pb_prop.replace('_',' ').title()} {side.title()} {pb_line} vs {pb_opp_full}"
+                st.info("Select a player to evaluate props.")
 
-            st.session_state["parlay_legs"].append({
-                "kind": "player",
-                "label": label,
-                "prob": prob,
-                "player": pb_player,
-                "prop": pb_prop,
-                "line": float(pb_line),
-                "side": side,
-                "opponent": pb_opp_full,
-            })
-            st.success("Added leg to parlay ✅")
 
-st.markdown("---")
+# -------------------------
+# Section 4: Parlay Builder
+# -------------------------
+with st.expander("4) Parlay Builder (Players + Game Markets)", expanded=(selected_section == section_names[3])):
+    if "parlay_legs" not in st.session_state:
+        st.session_state["parlay_legs"] = []
 
-st.markdown("**Add Game Market Leg**")
-g1, g2, g3, g4 = st.columns([1.0, 2.4, 1.6, 2])
-with g1:
-    week_for_market = st.selectbox("Week", sorted(scores_df["week"].dropna().unique()), key="gm_week")
-with g2:
-    wk_df = scores_df[scores_df["week"] == week_for_market].copy()
-    if "home_spread" not in wk_df.columns:
-        wk_df["home_spread"] = wk_df.apply(compute_home_spread, axis=1)
+    def unique_players(*dfs):
+        names = []
+        for df in dfs:
+            if "player" in df.columns:
+                names.extend(list(df["player"].dropna().astype(str).unique()))
+        return sorted(pd.unique(names))
 
-    matchups, meta, home_spreads_for_match, ous_for_match = [], [], [], []
-    for _, row in wk_df.iterrows():
-        h = row.get("home_team")
-        a = row.get("away_team")
-        if pd.isna(h) or pd.isna(a):
-            continue
-        matchups.append(f"{a} @ {h}")
-        meta.append((h, a))
-        home_spreads_for_match.append(float(row.get("home_spread")) if pd.notna(row.get("home_spread", np.nan)) else 0.0)
-        ous_for_match.append(float(row.get("over_under")) if pd.notna(row.get("over_under", np.nan)) else 45.0)
+    all_players = unique_players(qb_df, wr_df, rb_df, te_df)
+    full_team_names = sorted(list(CODE_TO_FULLNAME.values()))
 
-    gm_match = st.selectbox("Matchup", matchups, key="gm_matchup")
-    idx = matchups.index(gm_match) if gm_match in matchups else -1
-    gm_home = meta[idx][0] if idx >= 0 else None
-    gm_away = meta[idx][1] if idx >= 0 else None
-    default_home_sp = home_spreads_for_match[idx] if idx >= 0 else 0.0
-    default_ou = ous_for_match[idx] if idx >= 0 else 45.0
-with g3:
-    gm_market = st.selectbox("Market", ["Total", "Spread"], key="gm_market")
-with g4:
-    if gm_market == "Total":
-        gm_total = st.number_input("O/U Line", value=float(default_ou), step=0.5, key="gm_total_line")
-    else:
-        gm_spread = st.number_input("Home-based Spread", value=float(default_home_sp), step=0.5, key="gm_spread_line")
-
-# Show model prob for this leg
-if gm_home and gm_away:
-    if gm_market == "Total":
-        _, p_over, p_under = prob_total_over_under(scores_df, gm_home, gm_away, gm_total)
-        side = "over" if p_over >= p_under else "under"
-        leg_prob = float(p_over if side == "over" else p_under)
-        st.metric("Model side", f"{side.title()} ({leg_prob*100:.1f}%)")
-    else:
-        _, p_cov_home = prob_spread_cover(scores_df, gm_home, gm_away, gm_spread, "home")
-        _, p_cov_away = prob_spread_cover(scores_df, gm_home, gm_away, gm_spread, "away")
-        side = "home" if p_cov_home >= p_cov_away else "away"
-        leg_prob = float(p_cov_home if side == "home" else p_cov_away)
-        st.metric("Model side", f"{'Home' if side=='home' else 'Away'} ({leg_prob*100:.1f}%)")
-
-    if st.button("➕ Add Game Leg", use_container_width=True, key="gm_add"):
-        if gm_market == "Total":
-            label = f"{gm_away} @ {gm_home} Total {side.title()} {gm_total}"
-            st.session_state["parlay_legs"].append({
-                "kind": "game_total",
-                "label": label,
-                "prob": leg_prob,
-                "home_team": gm_home,
-                "away_team": gm_away,
-                "side": side,
-                "line": float(gm_total),
-            })
+    st.markdown("**Add Player Prop Leg**")
+    a1, a2, a3, a4 = st.columns([2.2, 1.4, 1.4, 2])
+    with a1:
+        pb_player = st.selectbox("Player", [""] + all_players, key="pb_any_player")
+    with a2:
+        pb_prop = st.selectbox("Prop", ["passing_yards", "rushing_yards", "receiving_yards", "receptions", "targets", "carries", "anytime_td"], key="pb_any_prop")
+    with a3:
+        if pb_prop == "anytime_td":
+            pb_line = 0.0
+            st.text_input("Line", "—", disabled=True, key="pb_any_line_disabled")
         else:
-            if side == "home":
-                side_text = f"{gm_home} {gm_spread:+.1f}"
+            pb_line = st.number_input("Line", value=50.0, step=0.5, key="pb_any_line")
+    with a4:
+        pb_opp_full = st.selectbox("Opponent (Full Name)", full_team_names, key="pb_any_opp_full")
+        pb_opp_key = FULLNAME_TO_CODE.get(pb_opp_full, "")
+
+    if st.button("➕ Add Player Leg", use_container_width=True, key="pb_any_add"):
+        if not pb_player:
+            st.warning("Pick a player first.")
+        elif not pb_opp_key:
+            st.warning("Pick an opponent team.")
+        else:
+            res = prop_prediction_and_probs(
+                player_name=pb_player,
+                selected_prop=pb_prop,
+                line_val=pb_line,
+                selected_team_key="",
+                opponent_key=pb_opp_key,
+                qb_df=qb_df,
+                wr_df=wr_df,
+                rb_df=rb_df,
+                te_df=te_df,
+                player_game_log_df=player_game_log_df,
+                team_log_df=team_log_df,
+                last_n_games=PROP_TREND_LAST_N,
+            )
+            if "error" in res:
+                st.warning(res["error"])
             else:
-                side_text = f"{gm_away} {(-gm_spread):+.1f}"
-            label = f"{gm_away} @ {gm_home} Spread {side_text}"
-            st.session_state["parlay_legs"].append({
-                "kind": "game_spread",
-                "label": label,
-                "prob": leg_prob,
-                "home_team": gm_home,
-                "away_team": gm_away,
-                "side": side,
-                "line": float(gm_spread),
-            })
-        st.success("Added leg to parlay ✅")
+                if pb_prop == "anytime_td":
+                    prob = float(res["prob_anytime"])
+                    side = "yes"
+                    label = f"{pb_player} Anytime TD vs {pb_opp_full}"
+                else:
+                    side = "over" if res["prob_over"] >= res["prob_under"] else "under"
+                    prob = float(res["prob_over"] if side == "over" else res["prob_under"])
+                    label = f"{pb_player} {pb_prop.replace('_',' ').title()} {side.title()} {pb_line} vs {pb_opp_full}"
 
-# Show current legs & overall parlay prob
-if st.session_state["parlay_legs"]:
-    st.subheader("Current Parlay Legs")
-    for i, leg in enumerate(st.session_state["parlay_legs"]):
-        c1, c2 = st.columns([8, 1])
-        c1.markdown(f"• **{leg.get('label','Leg')}** — Model Pr: **{leg.get('prob',0.0)*100:.1f}%**")
-        if c2.button("🗑 Remove", key=f"rm_parlay_leg_{i}"):
-            st.session_state["parlay_legs"].pop(i)
-            st.rerun()
-
-    probs = [float(leg.get("prob", 0.0)) for leg in st.session_state["parlay_legs"]]
-    parlay_hit_prob = float(np.prod(probs)) if probs else 0.0
-    model_dec_odds = prob_to_decimal(parlay_hit_prob)
-    model_am_odds = prob_to_american(parlay_hit_prob)
+                st.session_state["parlay_legs"].append({
+                    "kind": "player",
+                    "label": label,
+                    "prob": prob,
+                    "player": pb_player,
+                    "prop": pb_prop,
+                    "line": float(pb_line),
+                    "side": side,
+                    "opponent": pb_opp_full,
+                })
+                st.success("Added leg to parlay ✅")
 
     st.markdown("---")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.metric("Parlay Hit Probability", f"{parlay_hit_prob*100:.1f}%")
-    with c2:
-        st.metric("Model Fair Odds", f"{int(model_am_odds):+d}")
 
-    if st.button("💾 Save this parlay to My Bets", key="save_parlay_to_bets"):
-        parlay_bet = {
-            "type": "parlay_custom",
-            "label": f"Custom Parlay ({len(st.session_state['parlay_legs'])} legs)",
-            "legs": list(st.session_state["parlay_legs"]),
-            "model_prob": parlay_hit_prob,
-        }
-        st.session_state["my_bets"].append(parlay_bet)
-        st.success("Saved parlay to My Bets ✅")
+    st.markdown("**Add Game Market Leg**")
+    g1, g2, g3, g4 = st.columns([1.0, 2.4, 1.6, 2])
+    with g1:
+        week_for_market = st.selectbox("Week", sorted(scores_df["week"].dropna().unique()), key="gm_week")
+    with g2:
+        wk_df = scores_df[scores_df["week"] == week_for_market].copy()
+        if "home_spread" not in wk_df.columns:
+            wk_df["home_spread"] = wk_df.apply(compute_home_spread, axis=1)
 
-else:
-    st.info("Add legs above to build a parlay.")
-             opp_key = team_key(opponent)
-         res = prop_prediction_and_probs(
-             player_name=player,
-             selected_prop=prop_type,
-             line_val=line_val,
-             selected_team_key="",
-             opponent_key=opp_key,
-             qb_df=qb_df,
-             wr_df=wr_df,
-             rb_df=rb_df,
-             te_df=te_df,
-             player_game_log_df=player_game_log_df,
-             team_log_df=team_log_df,
-             last_n_games=PROP_TREND_LAST_N,
-         )
-         if "error" in res:
-             continue
+        matchups, meta, home_spreads_for_match, ous_for_match = [], [], [], []
+        for _, row in wk_df.iterrows():
+            h = row.get("home_team")
+            a = row.get("away_team")
+            if pd.isna(h) or pd.isna(a):
+                continue
+            matchups.append(f"{a} @ {h}")
+            meta.append((h, a))
+            home_spreads_for_match.append(float(row.get("home_spread")) if pd.notna(row.get("home_spread", np.nan)) else 0.0)
+            ous_for_match.append(float(row.get("over_under")) if pd.notna(row.get("over_under", np.nan)) else 45.0)
 
-         if prop_type == "anytime_td":
-             side = "yes"
-             prob = float(res["prob_anytime"])
-             label = f"{player} Anytime TD vs {opponent}"
-         else:
-             side = "over" if res["prob_over"] >= res["prob_under"] else "under"
-             prob = float(res["prob_over"] if side == "over" else res["prob_under"])
-             label = f"{player} {prop_type.replace('_',' ').title()} {side.title()} {line_val} vs {opponent}"
-
-         legs_candidates.append({
-             "label": label,
-             "prob": prob,
-             "player": player,
-             "prop": prop_type,
-             "side": side,
-             "line": float(line_val),
-             "opponent": opponent,
-         })
-
-     if not legs_candidates:
-         st.warning("No valid props could be evaluated from this file.")
-     else:
-         cand_df = pd.DataFrame([{"Label": l["label"], "Model Prob %": l["prob"] * 100} for l in legs_candidates])
-         st.subheader("All Evaluated Props")
-         st.dataframe(cand_df, use_container_width=True)
-
-         max_legs = min(10, len(legs_candidates))
-         leg_count = st.slider("Number of legs in auto parlay", 2, max_legs, min(5, max_legs))
-         legs_sorted = sorted(legs_candidates, key=lambda x: x["prob"], reverse=True)
-         chosen_legs = legs_sorted[:leg_count]
-
-         auto_probs = [l["prob"] for l in chosen_legs]
-         auto_parlay_prob = float(np.prod(auto_probs))
-         auto_dec_odds = prob_to_decimal(auto_parlay_prob)
-         auto_am_odds = prob_to_american(auto_parlay_prob)
-
-         st.subheader("Recommended Auto Parlay")
-         st.metric("Parlay Hit Probability", f"{auto_parlay_prob*100:.1f}%")
-         st.metric("Model Fair Odds", f"{int(auto_am_odds):+d}")
-
-         st.markdown("**Legs**")
-         auto_leg_df = pd.DataFrame(
-             [{"Leg": l["label"], "Model Prob %": l["prob"] * 100} for l in chosen_legs]
-         )
-         st.table(auto_leg_df)
-
-         if st.button("💾 Save this auto parlay to My Bets", key="save_auto_parlay_to_bets"):
-             parlay_bet = {
-                 "type": "parlay_auto",
-                 "label": f"Auto Parlay ({len(chosen_legs)} legs)",
-                 "legs": chosen_legs,
-                 "model_prob": auto_parlay_prob,
-             }
-             st.session_state["my_bets"].append(parlay_bet)
-             st.success("Auto parlay saved to My Bets ✅")
-
-if not bets:
-    st.info("You don't have any saved bets yet. Add them from **Player Props** or **Parlay Builder** or **Bulk Upload**.")
-else:
-    singles = [b for b in bets if b.get("type") == "player_prop"]
-    parlays = [b for b in bets if str(b.get("type", "")).startswith("parlay")]
-
-    st.subheader("Singles (Player Props)")
-    if singles:
-        singles_df = pd.DataFrame(
-            [
-                {
-                    "Game": b.get("game", ""),
-                    "Week": b.get("week", ""),
-                    "Player": b.get("player", ""),
-                    "Team": b.get("team", ""),
-                    "Opponent": b.get("opponent", ""),
-                    "Prop": b.get("prop", ""),
-                    "Side": b.get("side", ""),
-                    "Line": b.get("line", ""),
-                    "Model Prob %": b.get("model_prob", 0.0) * 100,
-                    "Adj Pred": b.get("predicted_pg", ""),
-                }
-                for b in singles
-            ]
-        )
-        st.dataframe(singles_df, use_container_width=True)
-    else:
-        st.write("No singles saved yet.")
-
-    st.subheader("Parlays")
-    if parlays:
-        for i, parlay in enumerate(parlays):
-            label = parlay.get("label", f"Parlay {i+1}")
-            p = parlay.get("model_prob", 0.0)
-            st.markdown(f"### {label} — Model Prob: **{p*100:.1f}%**")
-            legs = parlay.get("legs", [])
-            if legs:
-                leg_rows = []
-                for j, leg in enumerate(legs, start=1):
-                    leg_rows.append({
-                        "Leg #": j,
-                        "Description": leg.get("label", ""),
-                        "Model Prob %": leg.get("prob", 0.0) * 100,
-                    })
-                legs_df = pd.DataFrame(leg_rows)
-                st.table(legs_df)
-            else:
-                st.write("_No legs recorded for this parlay (check how it was saved)._")
-            st.markdown("---")
-    else:
-        st.write("No parlays saved yet.")
-
-    st.markdown("### Export / Manage")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("🧹 Clear all My Bets", key="clear_my_bets"):
-            st.session_state["my_bets"] = []
-            st.success("Cleared all bets.")
-            st.rerun()
-    with col2:
-        # Simple CSV export of all bets (flattened)
-        flat_rows = []
-        for b in bets:
-            if b.get("type") == "player_prop":
-                flat_rows.append({
-                    "Type": "Single",
-                    "Label": f"{b.get('player','')} {b.get('prop','')} {b.get('side','')} {b.get('line','')}",
-                    "Game": b.get("game",""),
-                    "Week": b.get("week",""),
-                    "Model Prob": b.get("model_prob",0.0),
-                })
-            else:
-                label = b.get("label", "Parlay")
-                flat_rows.append({
-                    "Type": "Parlay",
-                    "Label": label,
-                    "Game": "",
-                    "Week": "",
-                    "Model Prob": b.get("model_prob",0.0),
-                })
-        if flat_rows:
-            export_df = pd.DataFrame(flat_rows)
-            csv_bytes = export_df.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                "⬇️ Download My Bets as CSV",
-                data=csv_bytes,
-                file_name="my_bets.csv",
-                mime="text/csv",
-            )
+        gm_match = st.selectbox("Matchup", matchups, key="gm_matchup")
+        idx = matchups.index(gm_match) if gm_match in matchups else -1
+        gm_home = meta[idx][0] if idx >= 0 else None
+        gm_away = meta[idx][1] if idx >= 0 else None
+        default_home_sp = home_spreads_for_match[idx] if idx >= 0 else 0.0
+        default_ou = ous_for_match[idx] if idx >= 0 else 45.0
+    with g3:
+        gm_market = st.selectbox("Market", ["Total", "Spread"], key="gm_market")
+    with g4:
+        if gm_market == "Total":
+            gm_total = st.number_input("O/U Line", value=float(default_ou), step=0.5, key="gm_total_line")
         else:
-            st.write("Nothing to export yet.")
-                    sub = team_log_df.copy()
-        sub = sub[sub["team"] == pick_team]
+            gm_spread = st.number_input("Home-based Spread", value=float(default_home_sp), step=0.5, key="gm_spread_line")
 
-        if day_filter != "All" and "day" in sub.columns:
-            sub = sub[sub["day"].astype(str).str.lower() == day_filter.lower()]
+    # Show model prob for this leg
+    if gm_home and gm_away:
+        if gm_market == "Total":
+            _, p_over, p_under = prob_total_over_under(scores_df, gm_home, gm_away, gm_total)
+            side = "over" if p_over >= p_under else "under"
+            leg_prob = float(p_over if side == "over" else p_under)
+            st.metric("Model side", f"{side.title()} ({leg_prob*100:.1f}%)")
+        else:
+            _, p_cov_home = prob_spread_cover(scores_df, gm_home, gm_away, gm_spread, "home")
+            _, p_cov_away = prob_spread_cover(scores_df, gm_home, gm_away, gm_spread, "away")
+            side = "home" if p_cov_home >= p_cov_away else "away"
+            leg_prob = float(p_cov_home if side == "home" else p_cov_away)
+            st.metric("Model side", f"{'Home' if side=='home' else 'Away'} ({leg_prob*100:.1f}%)")
 
-        if "date" in sub.columns:
-            sub = sub.sort_values("date")
-        if last_n and last_n > 0:
-            sub = sub.tail(last_n)
+        if st.button("➕ Add Game Leg", use_container_width=True, key="gm_add"):
+            if gm_market == "Total":
+                label = f"{gm_away} @ {gm_home} Total {side.title()} {gm_total}"
+                st.session_state["parlay_legs"].append({
+                    "kind": "game_total",
+                    "label": label,
+                    "prob": leg_prob,
+                    "home_team": gm_home,
+                    "away_team": gm_away,
+                    "side": side,
+                    "line": float(gm_total),
+                })
+            else:
+                if side == "home":
+                    side_text = f"{gm_home} {gm_spread:+.1f}"
+                else:
+                    side_text = f"{gm_away} {(-gm_spread):+.1f}"
+                label = f"{gm_away} @ {gm_home} Spread {side_text}"
+                st.session_state["parlay_legs"].append({
+                    "kind": "game_spread",
+                    "label": label,
+                    "prob": leg_prob,
+                    "home_team": gm_home,
+                    "away_team": gm_away,
+                    "side": side,
+                    "line": float(gm_spread),
+                })
+            st.success("Added leg to parlay ✅")
 
-        ou_over = ou_under = ou_total = 0
-        if "ou_result_norm" in sub.columns:
-            vals = sub["ou_result_norm"].dropna().astype(str).str.lower()
-            ou_over = (vals == "over").sum()
-            ou_under = (vals == "under").sum()
-            ou_total = (vals.isin(["over", "under"])).sum()
-        cover_yes = cover_no = cover_total = 0
-        if "cover_result_norm" in sub.columns:
-            cvals = sub["cover_result_norm"].dropna().astype(str).str.lower()
-            cover_yes = (cvals == "covered").sum()
-            cover_no = (cvals == "did not cover").sum()
-            cover_total = (cvals.isin(["covered", "did not cover"])).sum()
+    # Show current legs & overall parlay prob
+    if st.session_state["parlay_legs"]:
+        st.subheader("Current Parlay Legs")
+        for i, leg in enumerate(st.session_state["parlay_legs"]):
+            c1, c2 = st.columns([8, 1])
+            c1.markdown(f"• **{leg.get('label','Leg')}** — Model Pr: **{leg.get('prob',0.0)*100:.1f}%**")
+            if c2.button("🗑 Remove", key=f"rm_parlay_leg_{i}"):
+                st.session_state["parlay_legs"].pop(i)
+                st.rerun()
 
-        m1, m2, m3 = st.columns(3)
-        with m1:
-            pct_over = (ou_over / ou_total * 100.0) if ou_total else 0.0
-            st.metric("O/U Over Hit %", f"{pct_over:.1f}%", f"{ou_over}/{ou_total}")
-        with m2:
-            pct_under = (ou_under / ou_total * 100.0) if ou_total else 0.0
-            st.metric("O/U Under Hit %", f"{pct_under:.1f}%", f"{ou_under}/{ou_total}")
-        with m3:
-            pct_cover = (cover_yes / cover_total * 100.0) if cover_total else 0.0
-            st.metric("Spread Cover %", f"{pct_cover:.1f}%", f"{cover_yes}/{cover_total} covered")
+        probs = [float(leg.get("prob", 0.0)) for leg in st.session_state["parlay_legs"]]
+        parlay_hit_prob = float(np.prod(probs)) if probs else 0.0
+        model_dec_odds = prob_to_decimal(parlay_hit_prob)
+        model_am_odds = prob_to_american(parlay_hit_prob)
 
-        if "day" in team_log_df.columns and "ou_result_norm" in team_log_df.columns:
-            day_data = team_log_df[team_log_df["team"] == pick_team].copy()
-            day_data = day_data[day_data["ou_result_norm"].isin(["over", "under"])]
-            if not day_data.empty:
-                grp = day_data.groupby(["day", "ou_result_norm"]).size().reset_index(name="count")
-                fig = px.bar(
-                    grp,
-                    x="day",
-                    y="count",
-                    color="ou_result_norm",
-                    title=f"{pick_team} — O/U Results by Day",
-                    barmode="group",
+        st.markdown("---")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.metric("Parlay Hit Probability", f"{parlay_hit_prob*100:.1f}%")
+        with c2:
+            st.metric("Model Fair Odds", f"{int(model_am_odds):+d}")
+
+        if st.button("💾 Save this parlay to My Bets", key="save_parlay_to_bets"):
+            parlay_bet = {
+                "type": "parlay_custom",
+                "label": f"Custom Parlay ({len(st.session_state['parlay_legs'])} legs)",
+                "legs": list(st.session_state["parlay_legs"]),
+                "model_prob": parlay_hit_prob,
+            }
+            st.session_state["my_bets"].append(parlay_bet)
+            st.success("Saved parlay to My Bets ✅")
+
+    else:
+        st.info("Add legs above to build a parlay.")
+
+
+# -------------------------
+# Section 5: Bulk Props Upload & Auto Parlay
+# -------------------------
+with st.expander("5) Bulk Props Upload & Auto Parlay", expanded=(selected_section == section_names[4])):
+    st.markdown("""
+Upload a CSV with columns:
+
+- **Player**  
+- **Team** (their team; optional but nice)  
+- **Opponent** (team they're facing)  
+- **PropType** (one of: `passing_yards`, `rushing_yards`, `receiving_yards`, `receptions`, `targets`, `carries`, `anytime_td`)  
+- **Line** (sportsbook line)
+
+The model will:
+1. Compute probabilities for **over** and **under**.
+2. Pick the better side automatically.
+3. Score each prop.
+4. Build the highest-probability parlay using your chosen leg count.
+""")
+
+    uploaded = st.file_uploader("Upload bulk props CSV", type=["csv"], key="bulk_props_upload")
+    if uploaded is not None:
+        bulk_df = pd.read_csv(uploaded)
+        required_cols = ["Player", "Opponent", "PropType", "Line"]
+        missing = [c for c in required_cols if c not in bulk_df.columns]
+        if missing:
+            st.error(f"Missing columns in upload: {', '.join(missing)}")
+        else:
+            legs_candidates = []
+            for idx, row in bulk_df.iterrows():
+                player = str(row["Player"]).strip()
+                opponent = str(row["Opponent"]).strip()
+                prop_type = str(row["PropType"]).strip()
+                try:
+                    line_val = float(row["Line"])
+                except Exception:
+                    continue
+
+                opp_key = team_key(opponent)
+                res = prop_prediction_and_probs(
+                    player_name=player,
+                    selected_prop=prop_type,
+                    line_val=line_val,
+                    selected_team_key="",
+                    opponent_key=opp_key,
+                    qb_df=qb_df,
+                    wr_df=wr_df,
+                    rb_df=rb_df,
+                    te_df=te_df,
+                    player_game_log_df=player_game_log_df,
+                    team_log_df=team_log_df,
+                    last_n_games=PROP_TREND_LAST_N,
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                if "error" in res:
+                    continue
 
-        show_cols = []
-        label_map = []
-        if "date" in sub.columns:
-            show_cols.append("date")
-            label_map.append("Date")
-        if "day" in sub.columns:
-            show_cols.append("day")
-            label_map.append("Day")
-        if "opponent" in sub.columns:
-            show_cols.append("opponent")
-            label_map.append("Opponent")
-        if "is_away" in sub.columns:
-            show_cols.append("is_away")
-            label_map.append("Away?")
-        if "ou_line" in sub.columns:
-            show_cols.append("ou_line")
-            label_map.append("O/U Line")
-        if "ou_result" in sub.columns:
-            show_cols.append("ou_result")
-            label_map.append("O/U Result")
-        if "spread" in sub.columns:
-            show_cols.append("spread")
-            label_map.append("Spread")
-        if "cover_result" in sub.columns:
-            show_cols.append("cover_result")
-            label_map.append("Cover Result")
-        if "result" in sub.columns:
-            show_cols.append("result")
-            label_map.append("Result")
+                if prop_type == "anytime_td":
+                    side = "yes"
+                    prob = float(res["prob_anytime"])
+                    label = f"{player} Anytime TD vs {opponent}"
+                else:
+                    side = "over" if res["prob_over"] >= res["prob_under"] else "under"
+                    prob = float(res["prob_over"] if side == "over" else res["prob_under"])
+                    label = f"{player} {prop_type.replace('_',' ').title()} {side.title()} {line_val} vs {opponent}"
 
-        if not show_cols:
-            st.info("Table columns not found in sheet. Check headers.")
+                legs_candidates.append({
+                    "label": label,
+                    "prob": prob,
+                    "player": player,
+                    "prop": prop_type,
+                    "side": side,
+                    "line": float(line_val),
+                    "opponent": opponent,
+                })
+
+            if not legs_candidates:
+                st.warning("No valid props could be evaluated from this file.")
+            else:
+                cand_df = pd.DataFrame([{"Label": l["label"], "Model Prob %": l["prob"] * 100} for l in legs_candidates])
+                st.subheader("All Evaluated Props")
+                st.dataframe(cand_df, use_container_width=True)
+
+                max_legs = min(10, len(legs_candidates))
+                leg_count = st.slider("Number of legs in auto parlay", 2, max_legs, min(5, max_legs))
+                legs_sorted = sorted(legs_candidates, key=lambda x: x["prob"], reverse=True)
+                chosen_legs = legs_sorted[:leg_count]
+
+                auto_probs = [l["prob"] for l in chosen_legs]
+                auto_parlay_prob = float(np.prod(auto_probs))
+                auto_dec_odds = prob_to_decimal(auto_parlay_prob)
+                auto_am_odds = prob_to_american(auto_parlay_prob)
+
+                st.subheader("Recommended Auto Parlay")
+                st.metric("Parlay Hit Probability", f"{auto_parlay_prob*100:.1f}%")
+                st.metric("Model Fair Odds", f"{int(auto_am_odds):+d}")
+
+                st.markdown("**Legs**")
+                auto_leg_df = pd.DataFrame(
+                    [{"Leg": l["label"], "Model Prob %": l["prob"] * 100} for l in chosen_legs]
+                )
+                st.table(auto_leg_df)
+
+                if st.button("💾 Save this auto parlay to My Bets", key="save_auto_parlay_to_bets"):
+                    parlay_bet = {
+                        "type": "parlay_auto",
+                        "label": f"Auto Parlay ({len(chosen_legs)} legs)",
+                        "legs": chosen_legs,
+                        "model_prob": auto_parlay_prob,
+                    }
+                    st.session_state["my_bets"].append(parlay_bet)
+                    st.success("Auto parlay saved to My Bets ✅")
+
+
+# -------------------------
+# Section 6: My Bets
+# -------------------------
+with st.expander("6) My Bets", expanded=(selected_section == section_names[5])):
+    bets = st.session_state.get("my_bets", [])
+
+    if not bets:
+        st.info("You don't have any saved bets yet. Add them from **Player Props** or **Parlay Builder** or **Bulk Upload**.")
+    else:
+        singles = [b for b in bets if b.get("type") == "player_prop"]
+        parlays = [b for b in bets if str(b.get("type", "")).startswith("parlay")]
+
+        st.subheader("Singles (Player Props)")
+        if singles:
+            singles_df = pd.DataFrame(
+                [
+                    {
+                        "Game": b.get("game", ""),
+                        "Week": b.get("week", ""),
+                        "Player": b.get("player", ""),
+                        "Team": b.get("team", ""),
+                        "Opponent": b.get("opponent", ""),
+                        "Prop": b.get("prop", ""),
+                        "Side": b.get("side", ""),
+                        "Line": b.get("line", ""),
+                        "Model Prob %": b.get("model_prob", 0.0) * 100,
+                        "Adj Pred": b.get("predicted_pg", ""),
+                    }
+                    for b in singles
+                ]
+            )
+            st.dataframe(singles_df, use_container_width=True)
         else:
-            st.subheader("Recent Games")
-            pretty = sub[show_cols].copy()
-            if "is_away" in pretty.columns:
-                pretty["is_away"] = pretty["is_away"].map({True: "@", False: "home"}).fillna("")
-            if "date" in pretty.columns:
-                pretty["date"] = pd.to_datetime(pretty["date"], errors="coerce").dt.strftime("%Y-%m-%d")
-            pretty.columns = label_map
-            st.dataframe(pretty, use_container_width=True)
+            st.write("No singles saved yet.")
+
+        st.subheader("Parlays")
+        if parlays:
+            for i, parlay in enumerate(parlays):
+                label = parlay.get("label", f"Parlay {i+1}")
+                p = parlay.get("model_prob", 0.0)
+                st.markdown(f"### {label} — Model Prob: **{p*100:.1f}%**")
+                legs = parlay.get("legs", [])
+                if legs:
+                    leg_rows = []
+                    for j, leg in enumerate(legs, start=1):
+                        leg_rows.append({
+                            "Leg #": j,
+                            "Description": leg.get("label", ""),
+                            "Model Prob %": leg.get("prob", 0.0) * 100,
+                        })
+                    legs_df = pd.DataFrame(leg_rows)
+                    st.table(legs_df)
+                else:
+                    st.write("_No legs recorded for this parlay (check how it was saved)._")
+                st.markdown("---")
+        else:
+            st.write("No parlays saved yet.")
+
+        st.markdown("### Export / Manage")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🧹 Clear all My Bets", key="clear_my_bets"):
+                st.session_state["my_bets"] = []
+                st.success("Cleared all bets.")
+                st.rerun()
+        with col2:
+            # Simple CSV export of all bets (flattened)
+            flat_rows = []
+            for b in bets:
+                if b.get("type") == "player_prop":
+                    flat_rows.append({
+                        "Type": "Single",
+                        "Label": f"{b.get('player','')} {b.get('prop','')} {b.get('side','')} {b.get('line','')}",
+                        "Game": b.get("game",""),
+                        "Week": b.get("week",""),
+                        "Model Prob": b.get("model_prob",0.0),
+                    })
+                else:
+                    label = b.get("label", "Parlay")
+                    flat_rows.append({
+                        "Type": "Parlay",
+                        "Label": label,
+                        "Game": "",
+                        "Week": "",
+                        "Model Prob": b.get("model_prob",0.0),
+                    })
+            if flat_rows:
+                export_df = pd.DataFrame(flat_rows)
+                csv_bytes = export_df.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "⬇️ Download My Bets as CSV",
+                    data=csv_bytes,
+                    file_name="my_bets.csv",
+                    mime="text/csv",
+                )
+            else:
+                st.write("Nothing to export yet.")
+
+
+# -------------------------
+# Section 7: Team Game Log & Trends
+# -------------------------
+with st.expander("7) Team Game Log & Trends (NEW)", expanded=(selected_section == section_names[6])):
+    if team_log_df is None or team_log_df.empty:
+        st.info("No team game log data found.")
+    else:
+        teams = sorted([t for t in team_log_df["team"].dropna().unique()] if "team" in team_log_df.columns else [])
+        if not teams:
+            st.info("Team column not present in sheet. Check your sharing/export.")
+        else:
+            tcol1, tcol2, tcol3 = st.columns([1.2, 1, 1])
+            with tcol1:
+                pick_team = st.selectbox("Team (abbr.)", teams, key="tgl_team")
+            with tcol2:
+                day_filter = st.selectbox("Day filter", ["All", "Sunday", "Monday", "Thursday"], index=0, key="tgl_day")
+            with tcol3:
+                last_n = st.number_input("Last N games (0 = all)", value=0, min_value=0, step=1, key="tgl_lastn")
+
+            sub = team_log_df.copy()
+            sub = sub[sub["team"] == pick_team]
+
+            if day_filter != "All" and "day" in sub.columns:
+                sub = sub[sub["day"].astype(str).str.lower() == day_filter.lower()]
+
+            if "date" in sub.columns:
+                sub = sub.sort_values("date")
+            if last_n and last_n > 0:
+                sub = sub.tail(last_n)
+
+            ou_over = ou_under = ou_total = 0
+            if "ou_result_norm" in sub.columns:
+                vals = sub["ou_result_norm"].dropna().astype(str).str.lower()
+                ou_over = (vals == "over").sum()
+                ou_under = (vals == "under").sum()
+                ou_total = (vals.isin(["over", "under"])).sum()
+            cover_yes = cover_no = cover_total = 0
+            if "cover_result_norm" in sub.columns:
+                cvals = sub["cover_result_norm"].dropna().astype(str).str.lower()
+                cover_yes = (cvals == "covered").sum()
+                cover_no = (cvals == "did not cover").sum()
+                cover_total = (cvals.isin(["covered", "did not cover"])).sum()
+
+            m1, m2, m3 = st.columns(3)
+            with m1:
+                pct_over = (ou_over / ou_total * 100.0) if ou_total else 0.0
+                st.metric("O/U Over Hit %", f"{pct_over:.1f}%", f"{ou_over}/{ou_total}")
+            with m2:
+                pct_under = (ou_under / ou_total * 100.0) if ou_total else 0.0
+                st.metric("O/U Under Hit %", f"{pct_under:.1f}%", f"{ou_under}/{ou_total}")
+            with m3:
+                pct_cover = (cover_yes / cover_total * 100.0) if cover_total else 0.0
+                st.metric("Spread Cover %", f"{pct_cover:.1f}%", f"{cover_yes}/{cover_total} covered")
+
+            if "day" in team_log_df.columns and "ou_result_norm" in team_log_df.columns:
+                day_data = team_log_df[team_log_df["team"] == pick_team].copy()
+                day_data = day_data[day_data["ou_result_norm"].isin(["over", "under"])]
+                if not day_data.empty:
+                    grp = day_data.groupby(["day", "ou_result_norm"]).size().reset_index(name="count")
+                    fig = px.bar(
+                        grp,
+                        x="day",
+                        y="count",
+                        color="ou_result_norm",
+                        title=f"{pick_team} — O/U Results by Day",
+                        barmode="group",
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+            show_cols = []
+            label_map = []
+            if "date" in sub.columns:
+                show_cols.append("date")
+                label_map.append("Date")
+            if "day" in sub.columns:
+                show_cols.append("day")
+                label_map.append("Day")
+            if "opponent" in sub.columns:
+                show_cols.append("opponent")
+                label_map.append("Opponent")
+            if "is_away" in sub.columns:
+                show_cols.append("is_away")
+                label_map.append("Away?")
+            if "ou_line" in sub.columns:
+                show_cols.append("ou_line")
+                label_map.append("O/U Line")
+            if "ou_result" in sub.columns:
+                show_cols.append("ou_result")
+                label_map.append("O/U Result")
+            if "spread" in sub.columns:
+                show_cols.append("spread")
+                label_map.append("Spread")
+            if "cover_result" in sub.columns:
+                show_cols.append("cover_result")
+                label_map.append("Cover Result")
+            if "result" in sub.columns:
+                show_cols.append("result")
+                label_map.append("Result")
+
+            if not show_cols:
+                st.info("Table columns not found in sheet. Check headers.")
+            else:
+                st.subheader("Recent Games")
+                pretty = sub[show_cols].copy()
+                if "is_away" in pretty.columns:
+                    pretty["is_away"] = pretty["is_away"].map({True: "@", False: "home"}).fillna("")
+                if "date" in pretty.columns:
+                    pretty["date"] = pd.to_datetime(pretty["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+                pretty.columns = label_map
+                st.dataframe(pretty, use_container_width=True)
