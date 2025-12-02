@@ -717,7 +717,7 @@ def prob_spread_cover(scores_df: pd.DataFrame, home: str, away: str, home_spread
 st.title("🏈 The Official un-official NFL Betting Model")
 
 with st.expander("📘 How This Model Works", expanded=False):
-    st.markdown(""")
+    st.markdown(" " ")
 - **Team projections:** based on historical scoring, calibrated to league averages, plus optional log-based adjustments.
 - **Player props:**
   - Season per-game → baseline.
