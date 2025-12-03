@@ -23,7 +23,7 @@ TE_STATS_URL = "https://docs.google.com/spreadsheets/d/1tAFG33Mh2WlDWAAobEJFbFS6
 PLAYER_GAME_LOG_URL = "https://docs.google.com/spreadsheets/d/1iJNtTJcC3zv0Qvb7LxynF1tTPlggN8hOpQP-ROnPda8/export?format=csv"
 
 # How many recent games to use for trend vs season
-PROP_TREND_LAST_N = 3
+PROP_TREND_LAST_N = 2
 
 # =========================
 # Team alias map
