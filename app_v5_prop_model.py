@@ -1418,16 +1418,23 @@ with st.expander("5) Team Game Log & Trends (NEW)", expanded=(selected_section =
         if not teams:
             st.info("Team column not present in sheet. Check your sharing/export.")
         else:
-            tcol1, tcol2, tcol3 = st.columns([1.2, 1, 1])
+            ALL_SCOPE_LABEL = "All NFL (League-wide)"
+            team_options = [ALL_SCOPE_LABEL] + teams
+
+            tcol1, tcol2, tcol3 = st.columns([1.4, 1, 1])
             with tcol1:
-                pick_team = st.selectbox("Team (abbr.)", teams, key="tgl_team")
+                pick_team = st.selectbox("Team / Scope", team_options, key="tgl_team")
             with tcol2:
                 day_filter = st.selectbox("Day filter", ["All", "Sunday", "Monday", "Thursday"], index=0, key="tgl_day")
             with tcol3:
                 last_n = st.number_input("Last N games (0 = all)", value=0, min_value=0, step=1, key="tgl_lastn")
 
+            # Base subset: either league-wide or single team
             sub = team_log_df.copy()
-            sub = sub[sub["team"] == pick_team]
+            is_league_wide = (pick_team == ALL_SCOPE_LABEL)
+
+            if not is_league_wide:
+                sub = sub[sub["team"] == pick_team]
 
             if day_filter != "All" and "day" in sub.columns:
                 sub = sub[sub["day"].astype(str).str.lower() == day_filter.lower()]
@@ -1450,19 +1457,26 @@ with st.expander("5) Team Game Log & Trends (NEW)", expanded=(selected_section =
                 cover_no = (cvals == "did not cover").sum()
                 cover_total = (cvals.isin(["covered", "did not cover"])).sum()
 
+            label_name = "NFL (All Teams)" if is_league_wide else pick_team
+
             m1, m2, m3 = st.columns(3)
             with m1:
                 pct_over = (ou_over / ou_total * 100.0) if ou_total else 0.0
-                st.metric("O/U Over Hit %", f"{pct_over:.1f}%", f"{ou_over}/{ou_total}")
+                st.metric(f"{label_name} O/U Over Hit %", f"{pct_over:.1f}%", f"{ou_over}/{ou_total}")
             with m2:
                 pct_under = (ou_under / ou_total * 100.0) if ou_total else 0.0
-                st.metric("O/U Under Hit %", f"{pct_under:.1f}%", f"{ou_under}/{ou_total}")
+                st.metric(f"{label_name} O/U Under Hit %", f"{pct_under:.1f}%", f"{ou_under}/{ou_total}")
             with m3:
                 pct_cover = (cover_yes / cover_total * 100.0) if cover_total else 0.0
-                st.metric("Spread Cover %", f"{pct_cover:.1f}%", f"{cover_yes}/{cover_total} covered")
+                st.metric(f"{label_name} Spread Cover %", f"{pct_cover:.1f}%", f"{cover_yes}/{cover_total} covered")
 
+            # Day-of-week breakdown, scoped correctly
             if "day" in team_log_df.columns and "ou_result_norm" in team_log_df.columns:
-                day_data = team_log_df[team_log_df["team"] == pick_team].copy()
+                if is_league_wide:
+                    day_data = team_log_df.copy()
+                else:
+                    day_data = team_log_df[team_log_df["team"] == pick_team].copy()
+
                 day_data = day_data[day_data["ou_result_norm"].isin(["over", "under"])]
                 if not day_data.empty:
                     grp = day_data.groupby(["day", "ou_result_norm"]).size().reset_index(name="count")
@@ -1471,7 +1485,7 @@ with st.expander("5) Team Game Log & Trends (NEW)", expanded=(selected_section =
                         x="day",
                         y="count",
                         color="ou_result_norm",
-                        title=f"{pick_team} — O/U Results by Day",
+                        title=f"{label_name} — O/U Results by Day",
                         barmode="group",
                     )
                     st.plotly_chart(fig, use_container_width=True)
@@ -1484,6 +1498,9 @@ with st.expander("5) Team Game Log & Trends (NEW)", expanded=(selected_section =
             if "day" in sub.columns:
                 show_cols.append("day")
                 label_map.append("Day")
+            if "team" in sub.columns and is_league_wide:
+                show_cols.append("team")
+                label_map.append("Team")
             if "opponent" in sub.columns:
                 show_cols.append("opponent")
                 label_map.append("Opponent")
@@ -1508,7 +1525,7 @@ with st.expander("5) Team Game Log & Trends (NEW)", expanded=(selected_section =
             if not show_cols:
                 st.info("Table columns not found in sheet. Check headers.")
             else:
-                st.subheader("Recent Games")
+                st.subheader("Recent Games" + (" (League-wide)" if is_league_wide else ""))
                 pretty = sub[show_cols].copy()
                 if "is_away" in pretty.columns:
                     pretty["is_away"] = pretty["is_away"].map({True: "@", False: "home"}).fillna("")
